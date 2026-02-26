@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Surf Relay",
+  "version": "0.1.0",
+  "description": "Attach to a tab and relay browser context for surf-compatible automation.",
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "debugger"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "action": {
+    "default_title": "Surf Relay",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "service_worker.js"
+  }
+}

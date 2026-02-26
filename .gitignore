@@ -1,0 +1,6 @@
+tickets/
+/bin/
+/dist/
+*.log
+*.tmp
+.DS_Store
