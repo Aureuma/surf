@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestHostConnect(t *testing.T) {
 	if got := hostConnect(""); got != "127.0.0.1" {
@@ -25,5 +28,17 @@ func TestMCPURL(t *testing.T) {
 	cfg := browserConfig{HostBind: "127.0.0.1", HostMCPPort: 8932}
 	if got := mcpURL(cfg); got != "http://127.0.0.1:8932/mcp" {
 		t.Fatalf("mcpURL got %q", got)
+	}
+}
+
+func TestProfilePathLayout(t *testing.T) {
+	t.Setenv("SURF_STATE_DIR", "/tmp/surf-state")
+	c := containerProfileDir("Work")
+	h := hostProfileDir("work")
+	if c != filepath.Clean("/tmp/surf-state/browser/profiles/container/work") {
+		t.Fatalf("container profile path mismatch: %s", c)
+	}
+	if h != filepath.Clean("/tmp/surf-state/browser/profiles/host/work") {
+		t.Fatalf("host profile path mismatch: %s", h)
 	}
 }

@@ -14,8 +14,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -28,35 +30,42 @@ Commands:
   status       Check runtime health
   logs         Stream runtime logs
   proxy        Start MCP path-compat proxy
+  host         Manage headed host browser (macOS/Linux)
   tunnel       Manage noVNC cloud tunnel
   extension    Manage Chrome extension scaffold
   version      Print version
 
 Examples:
   surf build
-  surf start
+  surf start --profile default
   surf status --json
-  surf tunnel start
+  surf host start --profile work
+  surf tunnel start --mode quick
+  surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
   surf extension install
 `
 
 const (
-	defaultImage         = "ghcr.io/aureuma/surf-browser:local"
-	defaultContainer     = "surf-playwright-mcp-headed"
-	defaultNetwork       = "si"
-	defaultHostBind      = "127.0.0.1"
-	defaultMCPPort       = 8931
-	defaultHostMCPPort   = 8932
-	defaultNoVNCPort     = 6080
-	defaultHostNoVNCPort = 6080
-	defaultMCPVersion    = "0.0.64"
-	version              = "0.1.0"
+	defaultImage          = "ghcr.io/aureuma/surf-browser:local"
+	defaultContainer      = "surf-playwright-mcp-headed"
+	defaultNetwork        = "si"
+	defaultHostBind       = "127.0.0.1"
+	defaultMCPPort        = 8931
+	defaultHostMCPPort    = 8932
+	defaultNoVNCPort      = 6080
+	defaultHostNoVNCPort  = 6080
+	defaultMCPVersion     = "0.0.64"
+	defaultProfileName    = "default"
+	defaultHostCDPPort    = 18800
+	defaultTunnelName     = "surf-cloudflared"
+	defaultCloudflaredImg = "cloudflare/cloudflared:latest"
 )
 
 type browserConfig struct {
 	ImageName      string `json:"image_name"`
 	ContainerName  string `json:"container_name"`
 	Network        string `json:"network"`
+	ProfileName    string `json:"profile_name"`
 	ProfileDir     string `json:"profile_dir"`
 	HostBind       string `json:"host_bind"`
 	HostMCPPort    int    `json:"host_mcp_port"`
@@ -90,7 +99,18 @@ type tunnelStatusPayload struct {
 	ContainerName string `json:"container_name"`
 	Running       bool   `json:"running"`
 	URL           string `json:"url,omitempty"`
+	Mode          string `json:"mode,omitempty"`
 	Error         string `json:"error,omitempty"`
+}
+
+type hostProcessState struct {
+	Profile     string `json:"profile"`
+	PID         int    `json:"pid"`
+	BrowserPath string `json:"browser_path"`
+	CDPPort     int    `json:"cdp_port"`
+	ProfileDir  string `json:"profile_dir"`
+	StartedAt   string `json:"started_at"`
+	LogFile     string `json:"log_file"`
 }
 
 func main() {
@@ -105,7 +125,7 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usageText)
 	case "version", "--version", "-v":
-		fmt.Println(version)
+		fmt.Println(surfVersion)
 	case "build":
 		cmdBuild(args)
 	case "start":
@@ -118,6 +138,8 @@ func main() {
 		cmdLogs(args)
 	case "proxy":
 		cmdProxy(args)
+	case "host":
+		cmdHost(args)
 	case "tunnel":
 		cmdTunnel(args)
 	case "extension":
@@ -128,11 +150,7 @@ func main() {
 }
 
 func defaultConfig() browserConfig {
-	home, _ := os.UserHomeDir()
-	profileDir := "/tmp/.surf-browser-profile"
-	if strings.TrimSpace(home) != "" {
-		profileDir = filepath.Join(home, ".surf", "browser", "profile")
-	}
+	profile := envOr("SURF_PROFILE", defaultProfileName)
 	vncPassword := strings.TrimSpace(os.Getenv("SURF_VNC_PASSWORD"))
 	if vncPassword == "" {
 		vncPassword = "surf"
@@ -141,7 +159,8 @@ func defaultConfig() browserConfig {
 		ImageName:      envOr("SURF_IMAGE", defaultImage),
 		ContainerName:  envOr("SURF_CONTAINER", defaultContainer),
 		Network:        envOr("SURF_NETWORK", defaultNetwork),
-		ProfileDir:     envOr("SURF_PROFILE_DIR", profileDir),
+		ProfileName:    profile,
+		ProfileDir:     envOr("SURF_PROFILE_DIR", containerProfileDir(profile)),
 		HostBind:       envOr("SURF_HOST_BIND", defaultHostBind),
 		HostMCPPort:    envOrInt("SURF_HOST_MCP_PORT", defaultHostMCPPort),
 		HostNoVNCPort:  envOrInt("SURF_HOST_NOVNC_PORT", defaultHostNoVNCPort),
@@ -213,22 +232,17 @@ func cmdStart(args []string) {
 	registerConfigFlags(fs, &cfg)
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
-		fatal(errors.New("usage: surf start [--skip-build] [--repo <path>] [--image <name>] [--name <container>] [--network <name>] [--profile-dir <path>] [--host-bind <addr>] [--host-mcp-port <n>] [--host-novnc-port <n>] [--mcp-port <n>] [--novnc-port <n>] [--vnc-password <pwd>] [--mcp-version <ver>] [--browser <name>] [--allowed-hosts <list>] [--json]"))
+		fatal(errors.New("usage: surf start [--skip-build] [--repo <path>] [--image <name>] [--name <container>] [--network <name>] [--profile <name>] [--profile-dir <path>] [--host-bind <addr>] [--host-mcp-port <n>] [--host-novnc-port <n>] [--mcp-port <n>] [--novnc-port <n>] [--vnc-password <pwd>] [--mcp-version <ver>] [--browser <name>] [--allowed-hosts <list>] [--json]"))
 	}
 	mustHaveCommand("docker")
+	applyContainerProfileDefault(fs, &cfg)
 
-	if strings.TrimSpace(cfg.ProfileDir) == "" {
-		fatal(errors.New("profile dir is required"))
-	}
 	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
 		fatal(err)
 	}
-
 	if !*skipBuild {
-		buildArgs := []string{"--repo", strings.TrimSpace(*repo), "--image", cfg.ImageName}
-		cmdBuild(buildArgs)
+		cmdBuild([]string{"--repo", strings.TrimSpace(*repo), "--image", cfg.ImageName})
 	}
-
 	if err := removeDockerContainer(cfg.ContainerName); err != nil {
 		fatal(err)
 	}
@@ -258,7 +272,6 @@ func cmdStart(args []string) {
 	if _, err := runDockerOutput(runArgs...); err != nil {
 		fatal(fmt.Errorf("docker run failed: %w", err))
 	}
-
 	status, err := waitForStatus(cfg, 15, time.Second)
 	if err != nil {
 		fatal(err)
@@ -278,9 +291,9 @@ func cmdStart(args []string) {
 	}
 	fmt.Printf("surf start\n")
 	fmt.Printf("  container=%s image=%s network=%s\n", cfg.ContainerName, cfg.ImageName, cfg.Network)
+	fmt.Printf("  profile=%s profile_dir=%s\n", cfg.ProfileName, cfg.ProfileDir)
 	fmt.Printf("  mcp_url=%s\n", mcpURL(cfg))
 	fmt.Printf("  novnc_url=%s\n", novncURL(cfg))
-	fmt.Printf("  profile_dir=%s\n", cfg.ProfileDir)
 }
 
 func cmdStop(args []string) {
@@ -298,11 +311,7 @@ func cmdStop(args []string) {
 		fatal(err)
 	}
 	if *jsonOut {
-		printJSON(map[string]any{
-			"ok":             true,
-			"command":        "stop",
-			"container_name": cfg.ContainerName,
-		})
+		printJSON(map[string]any{"ok": true, "command": "stop", "container_name": cfg.ContainerName})
 		return
 	}
 	fmt.Printf("surf stop: removed %s\n", cfg.ContainerName)
@@ -315,9 +324,10 @@ func cmdStatus(args []string) {
 	registerConfigFlags(fs, &cfg)
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
-		fatal(errors.New("usage: surf status [--image <name>] [--name <container>] [--network <name>] [--host-bind <addr>] [--host-mcp-port <n>] [--host-novnc-port <n>] [--mcp-port <n>] [--novnc-port <n>] [--json]"))
+		fatal(errors.New("usage: surf status [--name <container>] [--profile <name>] [--profile-dir <path>] [--json]"))
 	}
 	mustHaveCommand("docker")
+	applyContainerProfileDefault(fs, &cfg)
 
 	status, err := evaluateStatus(cfg)
 	if err != nil {
@@ -332,6 +342,7 @@ func cmdStatus(args []string) {
 	}
 	fmt.Printf("surf status\n")
 	fmt.Printf("  container=%s running=%t\n", status.ContainerName, status.ContainerRunning)
+	fmt.Printf("  profile=%s profile_dir=%s\n", cfg.ProfileName, cfg.ProfileDir)
 	if strings.TrimSpace(status.ContainerStatusLine) != "" {
 		fmt.Printf("  docker_ps=%s\n", status.ContainerStatusLine)
 	}
@@ -391,12 +402,15 @@ func cmdProxy(args []string) {
 	baseDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		baseDirector(req)
-		if req.Method == http.MethodGet {
-			if req.URL.Path == "/mcp" {
-				req.URL.Path = "/sse"
-			} else if strings.HasPrefix(req.URL.Path, "/mcp/") {
-				req.URL.Path = "/sse" + strings.TrimPrefix(req.URL.Path, "/mcp")
-			}
+		if req.Method != http.MethodGet {
+			return
+		}
+		if req.URL.Path == "/mcp" {
+			req.URL.Path = "/sse"
+			return
+		}
+		if strings.HasPrefix(req.URL.Path, "/mcp/") {
+			req.URL.Path = "/sse" + strings.TrimPrefix(req.URL.Path, "/mcp")
 		}
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
@@ -409,6 +423,219 @@ func cmdProxy(args []string) {
 	if err := http.ListenAndServe(addr, proxy); err != nil {
 		fatal(err)
 	}
+}
+
+func cmdHost(args []string) {
+	if len(args) == 0 {
+		fatal(errors.New("usage: surf host <start|stop|status|logs> [args]"))
+	}
+	sub := strings.ToLower(strings.TrimSpace(args[0]))
+	rest := args[1:]
+	switch sub {
+	case "start":
+		cmdHostStart(rest)
+	case "stop":
+		cmdHostStop(rest)
+	case "status":
+		cmdHostStatus(rest)
+	case "logs":
+		cmdHostLogs(rest)
+	default:
+		fatal(fmt.Errorf("unknown host command: %s", sub))
+	}
+}
+
+func cmdHostStart(args []string) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		fatal(fmt.Errorf("host browser mode is only supported on linux and darwin"))
+	}
+	fs := flag.NewFlagSet("host start", flag.ExitOnError)
+	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	profileDir := fs.String("profile-dir", "", "host browser profile directory")
+	browserPath := fs.String("browser-path", envOr("SURF_HOST_BROWSER_PATH", ""), "browser executable path")
+	cdpPort := fs.Int("cdp-port", envOrInt("SURF_HOST_CDP_PORT", defaultHostCDPPort), "CDP port")
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf host start [--profile <name>] [--profile-dir <path>] [--browser-path <path>] [--cdp-port <n>] [--json]"))
+	}
+
+	pname := sanitizeProfileName(*profile)
+	pdir := strings.TrimSpace(*profileDir)
+	if pdir == "" {
+		pdir = hostProfileDir(pname)
+	}
+	if err := os.MkdirAll(pdir, 0o700); err != nil {
+		fatal(err)
+	}
+	if pid, _ := readHostPID(pname); pid > 0 && processAlive(pid) {
+		fatal(fmt.Errorf("host browser profile %s already running (pid=%d)", pname, pid))
+	}
+	bin := strings.TrimSpace(*browserPath)
+	if bin == "" {
+		resolved, err := detectHostBrowserBinary()
+		if err != nil {
+			fatal(err)
+		}
+		bin = resolved
+	}
+	if _, err := os.Stat(bin); err != nil {
+		fatal(fmt.Errorf("browser binary not found: %s", bin))
+	}
+
+	logPath := hostLogPath(pname)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		fatal(err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		fatal(err)
+	}
+	defer logFile.Close()
+
+	launchArgs := []string{
+		"--remote-debugging-port=" + strconv.Itoa(*cdpPort),
+		"--user-data-dir=" + pdir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"about:blank",
+	}
+	cmd := exec.Command(bin, launchArgs...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		fatal(err)
+	}
+	pid := cmd.Process.Pid
+	_ = cmd.Process.Release()
+
+	state := hostProcessState{
+		Profile:     pname,
+		PID:         pid,
+		BrowserPath: bin,
+		CDPPort:     *cdpPort,
+		ProfileDir:  pdir,
+		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		LogFile:     logPath,
+	}
+	if err := writeHostState(state); err != nil {
+		fatal(err)
+	}
+	if *jsonOut {
+		printJSON(map[string]any{"ok": true, "state": state, "cdp_url": fmt.Sprintf("http://127.0.0.1:%d", *cdpPort)})
+		return
+	}
+	fmt.Printf("surf host start\n")
+	fmt.Printf("  profile=%s pid=%d\n", pname, pid)
+	fmt.Printf("  browser=%s\n", bin)
+	fmt.Printf("  profile_dir=%s\n", pdir)
+	fmt.Printf("  cdp_url=http://127.0.0.1:%d\n", *cdpPort)
+	fmt.Printf("  log=%s\n", logPath)
+}
+
+func cmdHostStop(args []string) {
+	fs := flag.NewFlagSet("host stop", flag.ExitOnError)
+	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf host stop [--profile <name>] [--json]"))
+	}
+	pname := sanitizeProfileName(*profile)
+	state, err := readHostState(pname)
+	if err != nil {
+		fatal(err)
+	}
+	if state.PID <= 0 {
+		fatal(fmt.Errorf("invalid pid for profile %s", pname))
+	}
+	_ = syscall.Kill(state.PID, syscall.SIGTERM)
+	for i := 0; i < 20; i++ {
+		if !processAlive(state.PID) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processAlive(state.PID) {
+		_ = syscall.Kill(state.PID, syscall.SIGKILL)
+	}
+	_ = os.Remove(hostStatePath(pname))
+	if *jsonOut {
+		printJSON(map[string]any{"ok": true, "profile": pname})
+		return
+	}
+	fmt.Printf("surf host stop: profile=%s pid=%d\n", pname, state.PID)
+}
+
+func cmdHostStatus(args []string) {
+	fs := flag.NewFlagSet("host status", flag.ExitOnError)
+	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf host status [--profile <name>] [--json]"))
+	}
+	pname := sanitizeProfileName(*profile)
+	state, err := readHostState(pname)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if *jsonOut {
+				printJSON(map[string]any{"ok": false, "profile": pname, "error": "not running"})
+				os.Exit(1)
+			}
+			fatal(fmt.Errorf("host profile %s is not running", pname))
+		}
+		fatal(err)
+	}
+	alive := processAlive(state.PID)
+	cdpURL := fmt.Sprintf("http://127.0.0.1:%d/json/version", state.CDPPort)
+	cdpCode := probeHTTPStatus(cdpURL)
+	ok := alive && cdpCode == 200
+	payload := map[string]any{
+		"ok":         ok,
+		"profile":    pname,
+		"pid":        state.PID,
+		"alive":      alive,
+		"cdp_port":   state.CDPPort,
+		"cdp_status": cdpCode,
+		"cdp_url":    cdpURL,
+		"state":      state,
+	}
+	if *jsonOut {
+		printJSON(payload)
+		if !ok {
+			os.Exit(1)
+		}
+		return
+	}
+	fmt.Printf("surf host status\n")
+	fmt.Printf("  profile=%s pid=%d alive=%t\n", pname, state.PID, alive)
+	fmt.Printf("  cdp_url=%s status=%d\n", cdpURL, cdpCode)
+	fmt.Printf("  profile_dir=%s\n", state.ProfileDir)
+	if !ok {
+		os.Exit(1)
+	}
+}
+
+func cmdHostLogs(args []string) {
+	fs := flag.NewFlagSet("host logs", flag.ExitOnError)
+	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf host logs [--profile <name>]"))
+	}
+	pname := sanitizeProfileName(*profile)
+	state, err := readHostState(pname)
+	if err != nil {
+		fatal(err)
+	}
+	data, err := os.ReadFile(state.LogFile)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Print(string(data))
 }
 
 func cmdTunnel(args []string) {
@@ -434,33 +661,53 @@ func cmdTunnel(args []string) {
 func cmdTunnelStart(args []string) {
 	fs := flag.NewFlagSet("tunnel start", flag.ExitOnError)
 	cfg := defaultConfig()
-	name := fs.String("name", "surf-cloudflared", "container name")
+	name := fs.String("name", defaultTunnelName, "container name")
 	target := fs.String("target-url", novncURL(cfg), "target URL to expose")
+	mode := fs.String("mode", "quick", "tunnel mode: quick|token")
+	token := fs.String("token", "", "cloudflare tunnel token")
+	vaultKey := fs.String("vault-key", "", "si vault key containing cloudflare tunnel token")
+	image := fs.String("image", envOr("SURF_CLOUDFLARED_IMAGE", defaultCloudflaredImg), "cloudflared image")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
-		fatal(errors.New("usage: surf tunnel start [--name <container>] [--target-url <url>] [--json]"))
+		fatal(errors.New("usage: surf tunnel start [--name <container>] [--target-url <url>] [--mode quick|token] [--token <value>] [--vault-key <key>] [--image <name>] [--json]"))
 	}
 	mustHaveCommand("docker")
 
+	resolvedMode := strings.ToLower(strings.TrimSpace(*mode))
+	if resolvedMode != "quick" && resolvedMode != "token" {
+		fatal(fmt.Errorf("invalid --mode %q (expected quick|token)", *mode))
+	}
+
 	_ = removeDockerContainer(*name)
-	_, err := runDockerOutput(
-		"run", "-d",
-		"--name", strings.TrimSpace(*name),
-		"--restart", "unless-stopped",
-		"cloudflare/cloudflared:latest",
-		"tunnel", "--no-autoupdate", "--url", strings.TrimSpace(*target),
-	)
-	if err != nil {
+	runArgs := []string{"run", "-d", "--name", strings.TrimSpace(*name), "--restart", "unless-stopped", strings.TrimSpace(*image), "tunnel", "--no-autoupdate"}
+	if resolvedMode == "quick" {
+		runArgs = append(runArgs, "--url", strings.TrimSpace(*target))
+	} else {
+		resolvedToken, err := resolveToken(strings.TrimSpace(*token), strings.TrimSpace(*vaultKey))
+		if err != nil {
+			fatal(err)
+		}
+		if resolvedToken == "" {
+			fatal(errors.New("tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or --vault-key)"))
+		}
+		runArgs = append(runArgs, "run", "--token", resolvedToken)
+	}
+
+	if _, err := runDockerOutput(runArgs...); err != nil {
 		fatal(err)
 	}
 	url := extractTryCloudflareURL(fetchContainerLogs(*name, 200))
-	payload := tunnelStatusPayload{OK: true, ContainerName: *name, Running: true, URL: url}
+	payload := tunnelStatusPayload{OK: true, ContainerName: *name, Running: true, URL: url, Mode: resolvedMode}
 	if *jsonOut {
 		printJSON(payload)
 		return
 	}
-	fmt.Printf("surf tunnel start: %s\n", *name)
+	fmt.Printf("surf tunnel start\n")
+	fmt.Printf("  container=%s mode=%s\n", *name, resolvedMode)
+	if resolvedMode == "quick" {
+		fmt.Printf("  target=%s\n", strings.TrimSpace(*target))
+	}
 	if strings.TrimSpace(url) != "" {
 		fmt.Printf("  public_url=%s\n", url)
 	} else {
@@ -470,7 +717,7 @@ func cmdTunnelStart(args []string) {
 
 func cmdTunnelStop(args []string) {
 	fs := flag.NewFlagSet("tunnel stop", flag.ExitOnError)
-	name := fs.String("name", "surf-cloudflared", "container name")
+	name := fs.String("name", defaultTunnelName, "container name")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
@@ -490,7 +737,7 @@ func cmdTunnelStop(args []string) {
 
 func cmdTunnelStatus(args []string) {
 	fs := flag.NewFlagSet("tunnel status", flag.ExitOnError)
-	name := fs.String("name", "surf-cloudflared", "container name")
+	name := fs.String("name", defaultTunnelName, "container name")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
@@ -530,7 +777,7 @@ func cmdTunnelStatus(args []string) {
 
 func cmdTunnelLogs(args []string) {
 	fs := flag.NewFlagSet("tunnel logs", flag.ExitOnError)
-	name := fs.String("name", "surf-cloudflared", "container name")
+	name := fs.String("name", defaultTunnelName, "container name")
 	tail := fs.Int("tail", 200, "tail line count")
 	follow := fs.Bool("follow", true, "follow logs")
 	_ = fs.Parse(args)
@@ -654,6 +901,7 @@ func registerConfigFlags(fs *flag.FlagSet, cfg *browserConfig) {
 	fs.StringVar(&cfg.ImageName, "image", cfg.ImageName, "docker image name")
 	fs.StringVar(&cfg.ContainerName, "name", cfg.ContainerName, "container name")
 	fs.StringVar(&cfg.Network, "network", cfg.Network, "docker network name")
+	fs.StringVar(&cfg.ProfileName, "profile", cfg.ProfileName, "browser profile name")
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", cfg.ProfileDir, "host profile directory")
 	fs.StringVar(&cfg.HostBind, "host-bind", cfg.HostBind, "host bind address")
 	fs.IntVar(&cfg.HostMCPPort, "host-mcp-port", cfg.HostMCPPort, "host MCP port")
@@ -664,6 +912,23 @@ func registerConfigFlags(fs *flag.FlagSet, cfg *browserConfig) {
 	fs.StringVar(&cfg.MCPVersion, "mcp-version", cfg.MCPVersion, "@playwright/mcp version")
 	fs.StringVar(&cfg.BrowserChannel, "browser", cfg.BrowserChannel, "browser channel")
 	fs.StringVar(&cfg.AllowedHosts, "allowed-hosts", cfg.AllowedHosts, "allowed hosts list")
+}
+
+func applyContainerProfileDefault(fs *flag.FlagSet, cfg *browserConfig) {
+	cfg.ProfileName = sanitizeProfileName(cfg.ProfileName)
+	if !flagPassed(fs, "profile-dir") {
+		cfg.ProfileDir = containerProfileDir(cfg.ProfileName)
+	}
+}
+
+func flagPassed(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func evaluateStatus(cfg browserConfig) (statusPayload, error) {
@@ -757,17 +1022,11 @@ func resolveRepoRoot(repo string) (string, error) {
 			return resolved, nil
 		}
 	}
-	cwd, err := os.Getwd()
-	if err == nil {
-		candidate := filepath.Clean(cwd)
-		if hasSurfLayout(candidate) {
-			return candidate, nil
-		}
+	if cwd, err := os.Getwd(); err == nil && hasSurfLayout(cwd) {
+		return filepath.Clean(cwd), nil
 	}
-	exe, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(exe)
-		cand := filepath.Clean(filepath.Join(dir, "..", ".."))
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", ".."))
 		if hasSurfLayout(cand) {
 			return cand, nil
 		}
@@ -866,12 +1125,155 @@ func novncURL(cfg browserConfig) string {
 	return fmt.Sprintf("http://%s:%d/vnc.html?autoconnect=1&resize=scale", hostConnect(cfg.HostBind), cfg.HostNoVNCPort)
 }
 
-func defaultExtensionInstallPath() string {
-	home, _ := os.UserHomeDir()
-	if strings.TrimSpace(home) == "" {
-		return "/tmp/.surf/extensions/chrome-relay"
+func resolveToken(explicit, vaultKey string) (string, error) {
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), nil
 	}
-	return filepath.Join(home, ".surf", "extensions", "chrome-relay")
+	if v := strings.TrimSpace(os.Getenv("SURF_CLOUDFLARE_TUNNEL_TOKEN")); v != "" {
+		return v, nil
+	}
+	if strings.TrimSpace(vaultKey) == "" {
+		return "", nil
+	}
+	return vaultGet(strings.TrimSpace(vaultKey))
+}
+
+func vaultGet(key string) (string, error) {
+	mustHaveCommand("si")
+	cmd := exec.Command("si", "vault", "get", key)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("si vault get %s failed: %s", key, msg)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func surfStateDir() string {
+	if p := strings.TrimSpace(os.Getenv("SURF_STATE_DIR")); p != "" {
+		return filepath.Clean(expandTilde(p))
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "/tmp/.surf"
+	}
+	return filepath.Join(home, ".surf")
+}
+
+func containerProfileDir(profile string) string {
+	return filepath.Join(surfStateDir(), "browser", "profiles", "container", sanitizeProfileName(profile))
+}
+
+func hostProfileDir(profile string) string {
+	return filepath.Join(surfStateDir(), "browser", "profiles", "host", sanitizeProfileName(profile))
+}
+
+func hostRuntimeDir() string {
+	return filepath.Join(surfStateDir(), "browser", "host")
+}
+
+func hostStatePath(profile string) string {
+	return filepath.Join(hostRuntimeDir(), sanitizeProfileName(profile)+".json")
+}
+
+func hostLogPath(profile string) string {
+	return filepath.Join(hostRuntimeDir(), sanitizeProfileName(profile)+".log")
+}
+
+func readHostPID(profile string) (int, error) {
+	state, err := readHostState(profile)
+	if err != nil {
+		return 0, err
+	}
+	return state.PID, nil
+}
+
+func readHostState(profile string) (hostProcessState, error) {
+	path := hostStatePath(profile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return hostProcessState{}, err
+	}
+	var state hostProcessState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return hostProcessState{}, err
+	}
+	return state, nil
+}
+
+func writeHostState(state hostProcessState) error {
+	path := hostStatePath(state.Profile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil
+}
+
+func detectHostBrowserBinary() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("SURF_HOST_BROWSER_PATH")); p != "" {
+		return p, nil
+	}
+	if runtime.GOOS == "darwin" {
+		candidates := []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			filepath.Join(os.Getenv("HOME"), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+		}
+		for _, candidate := range candidates {
+			if candidate == "" {
+				continue
+			}
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+		}
+	}
+	linuxBins := []string{"google-chrome", "google-chrome-stable", "brave-browser", "microsoft-edge", "chromium", "chromium-browser"}
+	for _, b := range linuxBins {
+		if p, err := exec.LookPath(b); err == nil {
+			return p, nil
+		}
+	}
+	return "", errors.New("no supported Chromium-based browser found; set --browser-path or SURF_HOST_BROWSER_PATH")
+}
+
+func sanitizeProfileName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return defaultProfileName
+	}
+	name = strings.ToLower(name)
+	re := regexp.MustCompile(`[^a-z0-9_-]+`)
+	name = re.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if name == "" {
+		return defaultProfileName
+	}
+	return name
+}
+
+func defaultExtensionInstallPath() string {
+	return filepath.Join(surfStateDir(), "extensions", "chrome-relay")
 }
 
 func copyDir(source, dest string) error {
