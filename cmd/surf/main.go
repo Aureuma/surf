@@ -493,13 +493,7 @@ func cmdHostStart(args []string) {
 	}
 	defer logFile.Close()
 
-	launchArgs := []string{
-		"--remote-debugging-port=" + strconv.Itoa(*cdpPort),
-		"--user-data-dir=" + pdir,
-		"--no-first-run",
-		"--no-default-browser-check",
-		"about:blank",
-	}
+	launchArgs := hostLaunchArgs(*cdpPort, pdir, os.Geteuid() == 0, os.Getenv("DISPLAY"))
 	cmd := exec.Command(bin, launchArgs...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -533,6 +527,23 @@ func cmdHostStart(args []string) {
 	fmt.Printf("  profile_dir=%s\n", pdir)
 	fmt.Printf("  cdp_url=http://127.0.0.1:%d\n", *cdpPort)
 	fmt.Printf("  log=%s\n", logPath)
+}
+
+func hostLaunchArgs(cdpPort int, profileDir string, isRoot bool, display string) []string {
+	args := []string{
+		"--remote-debugging-port=" + strconv.Itoa(cdpPort),
+		"--user-data-dir=" + profileDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+	}
+	if runtime.GOOS == "linux" && isRoot {
+		args = append(args, "--no-sandbox", "--disable-setuid-sandbox")
+	}
+	if strings.TrimSpace(display) == "" {
+		args = append(args, "--headless=new")
+	}
+	args = append(args, "about:blank")
+	return args
 }
 
 func cmdHostStop(args []string) {
