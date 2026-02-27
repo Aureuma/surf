@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,5 +74,104 @@ func TestHostLaunchArgsRootNoDisplay(t *testing.T) {
 	}
 	if !strings.Contains(joined, "--headless=new") {
 		t.Fatalf("expected headless flag when DISPLAY is empty: %v", args)
+	}
+}
+
+func TestDefaultHostProfileNameFromSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SURF_SETTINGS_HOME", home)
+	t.Setenv("SURF_SETTINGS_FILE", "")
+	t.Setenv("SURF_HOST_PROFILE", "")
+
+	settings := defaultSurfSettings()
+	settings.Browser.ProfileName = "lingospeak"
+	if err := saveSurfSettings(settings); err != nil {
+		t.Fatalf("saveSurfSettings: %v", err)
+	}
+
+	if got := defaultHostProfileName(); got != "lingospeak" {
+		t.Fatalf("defaultHostProfileName()=%q", got)
+	}
+}
+
+func TestDefaultHostProfileNameEnvOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SURF_SETTINGS_HOME", home)
+	t.Setenv("SURF_SETTINGS_FILE", "")
+	t.Setenv("SURF_HOST_PROFILE", "prod-main")
+
+	settings := defaultSurfSettings()
+	settings.Browser.ProfileName = "lingospeak"
+	if err := saveSurfSettings(settings); err != nil {
+		t.Fatalf("saveSurfSettings: %v", err)
+	}
+
+	if got := defaultHostProfileName(); got != "prod-main" {
+		t.Fatalf("defaultHostProfileName()=%q", got)
+	}
+}
+
+func TestDefaultHostProfileNameFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SURF_SETTINGS_HOME", home)
+	t.Setenv("SURF_SETTINGS_FILE", filepath.Join(home, "missing", "settings.toml"))
+	t.Setenv("SURF_HOST_PROFILE", "")
+	if err := os.RemoveAll(filepath.Join(home, "missing")); err != nil {
+		t.Fatalf("remove missing dir: %v", err)
+	}
+
+	if got := defaultHostProfileName(); got != "default" {
+		t.Fatalf("defaultHostProfileName()=%q", got)
+	}
+}
+
+func TestResolveProfileMountBindPath(t *testing.T) {
+	mount, hostPath, bind := resolveProfileMount("~/state/profile")
+	if !bind {
+		t.Fatalf("expected bind mount")
+	}
+	if !strings.HasSuffix(hostPath, "/state/profile") {
+		t.Fatalf("hostPath=%q", hostPath)
+	}
+	if !strings.Contains(mount, ":/home/pwuser/.playwright-mcp-profile") {
+		t.Fatalf("mount=%q", mount)
+	}
+}
+
+func TestResolveProfileMountVolume(t *testing.T) {
+	mount, hostPath, bind := resolveProfileMount("volume:ls")
+	if bind {
+		t.Fatalf("expected docker volume mount")
+	}
+	if hostPath != "" {
+		t.Fatalf("hostPath=%q", hostPath)
+	}
+	if mount != "surf-profile-ls:/home/pwuser/.playwright-mcp-profile" {
+		t.Fatalf("mount=%q", mount)
+	}
+}
+
+func TestApplyContainerProfileDefaultKeepsConfiguredProfileDir(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cfg := &browserConfig{
+		ProfileName: "ls",
+		ProfileDir:  "volume:ls",
+	}
+	applyContainerProfileDefault(fs, cfg)
+	if cfg.ProfileDir != "volume:ls" {
+		t.Fatalf("profile_dir=%q", cfg.ProfileDir)
+	}
+}
+
+func TestApplyContainerProfileDefaultSetsPathWhenEmpty(t *testing.T) {
+	t.Setenv("SURF_STATE_DIR", "/tmp/surf-state")
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cfg := &browserConfig{
+		ProfileName: "work",
+		ProfileDir:  "",
+	}
+	applyContainerProfileDefault(fs, cfg)
+	if cfg.ProfileDir != filepath.Clean("/tmp/surf-state/browser/profiles/container/work") {
+		t.Fatalf("profile_dir=%q", cfg.ProfileDir)
 	}
 }

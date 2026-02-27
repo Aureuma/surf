@@ -64,6 +64,7 @@ const (
 	defaultHostCDPPort    = 18800
 	defaultTunnelName     = "surf-cloudflared"
 	defaultCloudflaredImg = "cloudflare/cloudflared:latest"
+	profileVolumePrefix   = "volume:"
 )
 
 type browserConfig struct {
@@ -263,9 +264,12 @@ func cmdStart(args []string) {
 	}
 	mustHaveCommand("docker")
 	applyContainerProfileDefault(fs, &cfg)
+	profileMount, profileHostPath, bindMount := resolveProfileMount(cfg.ProfileDir)
 
-	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
-		fatal(err)
+	if bindMount {
+		if err := os.MkdirAll(profileHostPath, 0o700); err != nil {
+			fatal(err)
+		}
 	}
 	if !*skipBuild {
 		cmdBuild([]string{"--repo", strings.TrimSpace(*repo), "--image", cfg.ImageName})
@@ -293,7 +297,7 @@ func cmdStart(args []string) {
 		"-e", "NOVNC_PORT=" + strconv.Itoa(cfg.NoVNCPort),
 		"-p", fmt.Sprintf("%s:%d:%d", cfg.HostBind, cfg.HostMCPPort, cfg.MCPPort),
 		"-p", fmt.Sprintf("%s:%d:%d", cfg.HostBind, cfg.HostNoVNCPort, cfg.NoVNCPort),
-		"-v", fmt.Sprintf("%s:/home/pwuser/.playwright-mcp-profile", cfg.ProfileDir),
+		"-v", profileMount,
 		cfg.ImageName,
 	}
 	if _, err := runDockerOutput(runArgs...); err != nil {
@@ -477,7 +481,7 @@ func cmdHostStart(args []string) {
 		fatal(fmt.Errorf("host browser mode is only supported on linux and darwin"))
 	}
 	fs := flag.NewFlagSet("host start", flag.ExitOnError)
-	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	profile := fs.String("profile", defaultHostProfileName(), "host browser profile name")
 	profileDir := fs.String("profile-dir", "", "host browser profile directory")
 	browserPath := fs.String("browser-path", envOr("SURF_HOST_BROWSER_PATH", ""), "browser executable path")
 	cdpPort := fs.Int("cdp-port", envOrInt("SURF_HOST_CDP_PORT", defaultHostCDPPort), "CDP port")
@@ -575,7 +579,7 @@ func hostLaunchArgs(cdpPort int, profileDir string, isRoot bool, display string)
 
 func cmdHostStop(args []string) {
 	fs := flag.NewFlagSet("host stop", flag.ExitOnError)
-	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	profile := fs.String("profile", defaultHostProfileName(), "host browser profile name")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
@@ -609,7 +613,7 @@ func cmdHostStop(args []string) {
 
 func cmdHostStatus(args []string) {
 	fs := flag.NewFlagSet("host status", flag.ExitOnError)
-	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	profile := fs.String("profile", defaultHostProfileName(), "host browser profile name")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
@@ -659,7 +663,7 @@ func cmdHostStatus(args []string) {
 
 func cmdHostLogs(args []string) {
 	fs := flag.NewFlagSet("host logs", flag.ExitOnError)
-	profile := fs.String("profile", envOr("SURF_HOST_PROFILE", defaultProfileName), "host browser profile name")
+	profile := fs.String("profile", defaultHostProfileName(), "host browser profile name")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
 		fatal(errors.New("usage: surf host logs [--profile <name>]"))
@@ -1069,7 +1073,7 @@ func registerConfigFlags(fs *flag.FlagSet, cfg *browserConfig) {
 
 func applyContainerProfileDefault(fs *flag.FlagSet, cfg *browserConfig) {
 	cfg.ProfileName = sanitizeProfileName(cfg.ProfileName)
-	if !flagPassed(fs, "profile-dir") {
+	if !flagPassed(fs, "profile-dir") && strings.TrimSpace(cfg.ProfileDir) == "" {
 		cfg.ProfileDir = containerProfileDir(cfg.ProfileName)
 	}
 }
@@ -1289,6 +1293,31 @@ func resolveToken(explicit, vaultKey string) (string, error) {
 		return "", nil
 	}
 	return vaultGet(strings.TrimSpace(vaultKey))
+}
+
+func resolveProfileMount(profileDir string) (mountArg, hostPath string, bindMount bool) {
+	resolved := strings.TrimSpace(profileDir)
+	lower := strings.ToLower(resolved)
+	if strings.HasPrefix(lower, profileVolumePrefix) {
+		volumeName := sanitizeProfileName(strings.TrimSpace(resolved[len(profileVolumePrefix):]))
+		if volumeName == "" {
+			volumeName = "default"
+		}
+		return fmt.Sprintf("%s:/home/pwuser/.playwright-mcp-profile", "surf-profile-"+volumeName), "", false
+	}
+	cleaned := filepath.Clean(expandTilde(resolved))
+	return fmt.Sprintf("%s:/home/pwuser/.playwright-mcp-profile", cleaned), cleaned, true
+}
+
+func defaultHostProfileName() string {
+	if profile := strings.TrimSpace(os.Getenv("SURF_HOST_PROFILE")); profile != "" {
+		return sanitizeProfileName(profile)
+	}
+	settings := loadSurfSettingsOrDefault()
+	if profile := strings.TrimSpace(settings.Browser.ProfileName); profile != "" {
+		return sanitizeProfileName(profile)
+	}
+	return defaultProfileName
 }
 
 func vaultGet(key string) (string, error) {
