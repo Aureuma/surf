@@ -1,6 +1,7 @@
 tickets/
 /bin/
 /dist/
+.artifacts/
 *.log
 *.tmp
 .DS_Store

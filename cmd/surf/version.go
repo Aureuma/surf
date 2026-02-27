@@ -1,3 +1,3 @@
 package main
 
-const surfVersion = "v0.1.0"
+const surfVersion = "v0.1.1"
