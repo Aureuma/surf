@@ -10,6 +10,7 @@ It provides:
 - optional hosted token tunnel mode with secret retrieval from `si vault`
 - local headed host browser control (Chromium-based) for macOS/Linux
 - MCP compatibility proxy (`/mcp` -> `/sse` GET rewrite)
+- persistent surf settings in `~/.si/surf/settings.toml`
 
 ## Install
 
@@ -50,6 +51,24 @@ surf host status --profile work
 surf host stop --profile work
 ```
 
+## Settings
+
+`surf` manages its own settings file at:
+
+- `~/.si/surf/settings.toml`
+
+The directory and file are auto-created on first config/runtime usage.
+
+Common commands:
+
+```bash
+surf config path
+surf config init
+surf config show --json
+surf config set --key tunnel.mode --value token
+surf config set --key tunnel.vault_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
+```
+
 ## Public noVNC exposure over Cloudflare
 
 Quick ephemeral tunnel:
@@ -88,6 +107,12 @@ si surf <...>
 ```
 
 `si surf` can hydrate selected `SURF_*` secrets from `si vault` when present.
+It can also manage wrapper defaults in `~/.si/settings.toml` via:
+
+```bash
+si surf config show --json
+si surf config set --repo /path/to/surf --bin /path/to/surf/bin/surf --build true
+```
 
 ## Release and versioning
 

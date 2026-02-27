@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const usageText = `surf <command> [args]
@@ -29,6 +31,7 @@ Commands:
   stop         Stop/remove runtime container
   status       Check runtime health
   logs         Stream runtime logs
+  config       Manage surf settings file
   proxy        Start MCP path-compat proxy
   host         Manage headed host browser (macOS/Linux)
   tunnel       Manage noVNC cloud tunnel
@@ -36,6 +39,8 @@ Commands:
   version      Print version
 
 Examples:
+  surf config show --json
+  surf config set --key tunnel.mode --value token
   surf build
   surf start --profile default
   surf status --json
@@ -121,11 +126,19 @@ func main() {
 	cmd := strings.ToLower(strings.TrimSpace(os.Args[1]))
 	args := os.Args[2:]
 
+	if cmd != "help" && cmd != "-h" && cmd != "--help" && cmd != "version" && cmd != "--version" && cmd != "-v" {
+		if _, err := loadSurfSettings(); err != nil {
+			fatal(err)
+		}
+	}
+
 	switch cmd {
 	case "help", "-h", "--help":
 		fmt.Print(usageText)
 	case "version", "--version", "-v":
 		fmt.Println(surfVersion)
+	case "config":
+		cmdConfig(args)
 	case "build":
 		cmdBuild(args)
 	case "start":
@@ -150,26 +163,37 @@ func main() {
 }
 
 func defaultConfig() browserConfig {
-	profile := envOr("SURF_PROFILE", defaultProfileName)
+	settings := loadSurfSettingsOrDefault()
+	profile := envOr("SURF_PROFILE", strings.TrimSpace(settings.Browser.ProfileName))
+	if profile == "" {
+		profile = defaultProfileName
+	}
 	vncPassword := strings.TrimSpace(os.Getenv("SURF_VNC_PASSWORD"))
+	if vncPassword == "" {
+		vncPassword = strings.TrimSpace(settings.Browser.VNCPassword)
+	}
 	if vncPassword == "" {
 		vncPassword = "surf"
 	}
+	profileDir := envOr("SURF_PROFILE_DIR", strings.TrimSpace(settings.Browser.ProfileDir))
+	if profileDir == "" {
+		profileDir = containerProfileDir(profile)
+	}
 	return browserConfig{
-		ImageName:      envOr("SURF_IMAGE", defaultImage),
-		ContainerName:  envOr("SURF_CONTAINER", defaultContainer),
-		Network:        envOr("SURF_NETWORK", defaultNetwork),
+		ImageName:      envOr("SURF_IMAGE", firstNonEmpty(strings.TrimSpace(settings.Browser.ImageName), defaultImage)),
+		ContainerName:  envOr("SURF_CONTAINER", firstNonEmpty(strings.TrimSpace(settings.Browser.ContainerName), defaultContainer)),
+		Network:        envOr("SURF_NETWORK", firstNonEmpty(strings.TrimSpace(settings.Browser.Network), defaultNetwork)),
 		ProfileName:    profile,
-		ProfileDir:     envOr("SURF_PROFILE_DIR", containerProfileDir(profile)),
-		HostBind:       envOr("SURF_HOST_BIND", defaultHostBind),
-		HostMCPPort:    envOrInt("SURF_HOST_MCP_PORT", defaultHostMCPPort),
-		HostNoVNCPort:  envOrInt("SURF_HOST_NOVNC_PORT", defaultHostNoVNCPort),
-		MCPPort:        envOrInt("SURF_MCP_PORT", defaultMCPPort),
-		NoVNCPort:      envOrInt("SURF_NOVNC_PORT", defaultNoVNCPort),
+		ProfileDir:     profileDir,
+		HostBind:       envOr("SURF_HOST_BIND", firstNonEmpty(strings.TrimSpace(settings.Browser.HostBind), defaultHostBind)),
+		HostMCPPort:    envOrInt("SURF_HOST_MCP_PORT", intOrFallback(settings.Browser.HostMCPPort, defaultHostMCPPort)),
+		HostNoVNCPort:  envOrInt("SURF_HOST_NOVNC_PORT", intOrFallback(settings.Browser.HostNoVNCPort, defaultHostNoVNCPort)),
+		MCPPort:        envOrInt("SURF_MCP_PORT", intOrFallback(settings.Browser.MCPPort, defaultMCPPort)),
+		NoVNCPort:      envOrInt("SURF_NOVNC_PORT", intOrFallback(settings.Browser.NoVNCPort, defaultNoVNCPort)),
 		VNCPassword:    vncPassword,
-		MCPVersion:     envOr("SURF_MCP_VERSION", defaultMCPVersion),
-		BrowserChannel: envOr("SURF_BROWSER_CHANNEL", "chromium"),
-		AllowedHosts:   envOr("SURF_ALLOWED_HOSTS", "*"),
+		MCPVersion:     envOr("SURF_MCP_VERSION", firstNonEmpty(strings.TrimSpace(settings.Browser.MCPVersion), defaultMCPVersion)),
+		BrowserChannel: envOr("SURF_BROWSER_CHANNEL", firstNonEmpty(strings.TrimSpace(settings.Browser.BrowserChannel), "chromium")),
+		AllowedHosts:   envOr("SURF_ALLOWED_HOSTS", firstNonEmpty(strings.TrimSpace(settings.Browser.AllowedHosts), "*")),
 	}
 }
 
@@ -649,6 +673,115 @@ func cmdHostLogs(args []string) {
 	fmt.Print(string(data))
 }
 
+func cmdConfig(args []string) {
+	if len(args) == 0 {
+		fatal(errors.New("usage: surf config <show|set|path|init> [args]"))
+	}
+	sub := strings.ToLower(strings.TrimSpace(args[0]))
+	rest := args[1:]
+	switch sub {
+	case "show", "get":
+		cmdConfigShow(rest)
+	case "set":
+		cmdConfigSet(rest)
+	case "path":
+		cmdConfigPath(rest)
+	case "init":
+		cmdConfigInit(rest)
+	default:
+		fatal(fmt.Errorf("unknown config command: %s", sub))
+	}
+}
+
+func cmdConfigShow(args []string) {
+	fs := flag.NewFlagSet("config show", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf config show [--json]"))
+	}
+	settings := loadSurfSettingsOrDefault()
+	if *jsonOut {
+		printJSON(settings)
+		return
+	}
+	data, err := toml.Marshal(settings)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Print(string(data))
+}
+
+func cmdConfigSet(args []string) {
+	fs := flag.NewFlagSet("config set", flag.ExitOnError)
+	key := fs.String("key", "", "setting key (for example tunnel.mode)")
+	value := fs.String("value", "", "setting value")
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf config set --key <path> --value <value> [--json]"))
+	}
+	if strings.TrimSpace(*key) == "" {
+		fatal(errors.New("--key is required"))
+	}
+	settings := loadSurfSettingsOrDefault()
+	if err := setSurfConfigValue(&settings, *key, *value); err != nil {
+		fatal(err)
+	}
+	if err := saveSurfSettings(settings); err != nil {
+		fatal(err)
+	}
+	if *jsonOut {
+		printJSON(map[string]any{
+			"ok":            true,
+			"key":           strings.TrimSpace(*key),
+			"settings_file": surfSettingsPath(),
+		})
+		return
+	}
+	fmt.Printf("surf config set: %s\n", strings.TrimSpace(*key))
+}
+
+func cmdConfigPath(args []string) {
+	fs := flag.NewFlagSet("config path", flag.ExitOnError)
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf config path"))
+	}
+	fmt.Println(surfSettingsPath())
+}
+
+func cmdConfigInit(args []string) {
+	fs := flag.NewFlagSet("config init", flag.ExitOnError)
+	force := fs.Bool("force", false, "overwrite existing settings file with defaults")
+	jsonOut := fs.Bool("json", false, "output json")
+	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fatal(errors.New("usage: surf config init [--force] [--json]"))
+	}
+	path := surfSettingsPath()
+	if !*force {
+		if _, err := os.Stat(path); err == nil {
+			if *jsonOut {
+				printJSON(map[string]any{"ok": true, "settings_file": path, "created": false})
+				return
+			}
+			fmt.Printf("surf config init: already exists at %s\n", path)
+			return
+		}
+	}
+	settings := defaultSurfSettings()
+	applySurfSettingsDefaults(&settings)
+	if err := saveSurfSettings(settings); err != nil {
+		fatal(err)
+	}
+	if *jsonOut {
+		printJSON(map[string]any{"ok": true, "settings_file": path, "created": true})
+		return
+	}
+	fmt.Printf("surf config init: wrote %s\n", path)
+}
+
 func cmdTunnel(args []string) {
 	if len(args) == 0 {
 		fatal(errors.New("usage: surf tunnel <start|stop|status|logs> [args]"))
@@ -672,12 +805,18 @@ func cmdTunnel(args []string) {
 func cmdTunnelStart(args []string) {
 	fs := flag.NewFlagSet("tunnel start", flag.ExitOnError)
 	cfg := defaultConfig()
-	name := fs.String("name", defaultTunnelName, "container name")
-	target := fs.String("target-url", novncURL(cfg), "target URL to expose")
-	mode := fs.String("mode", "quick", "tunnel mode: quick|token")
+	settings := loadSurfSettingsOrDefault()
+	tunnelCfg := settings.Tunnel
+	defaultTargetURL := strings.TrimSpace(tunnelCfg.TargetURL)
+	if defaultTargetURL == "" {
+		defaultTargetURL = novncURL(cfg)
+	}
+	name := fs.String("name", envOr("SURF_TUNNEL_NAME", firstNonEmpty(strings.TrimSpace(tunnelCfg.ContainerName), defaultTunnelName)), "container name")
+	target := fs.String("target-url", envOr("SURF_TUNNEL_TARGET_URL", defaultTargetURL), "target URL to expose")
+	mode := fs.String("mode", envOr("SURF_TUNNEL_MODE", firstNonEmpty(strings.TrimSpace(tunnelCfg.Mode), "quick")), "tunnel mode: quick|token")
 	token := fs.String("token", "", "cloudflare tunnel token")
-	vaultKey := fs.String("vault-key", "", "si vault key containing cloudflare tunnel token")
-	image := fs.String("image", envOr("SURF_CLOUDFLARED_IMAGE", defaultCloudflaredImg), "cloudflared image")
+	vaultKey := fs.String("vault-key", envOr("SURF_TUNNEL_VAULT_KEY", strings.TrimSpace(tunnelCfg.VaultKey)), "si vault key containing cloudflare tunnel token")
+	image := fs.String("image", envOr("SURF_CLOUDFLARED_IMAGE", firstNonEmpty(strings.TrimSpace(tunnelCfg.Image), defaultCloudflaredImg)), "cloudflared image")
 	jsonOut := fs.Bool("json", false, "output json")
 	_ = fs.Parse(args)
 	if fs.NArg() > 0 {
@@ -1170,11 +1309,32 @@ func surfStateDir() string {
 	if p := strings.TrimSpace(os.Getenv("SURF_STATE_DIR")); p != "" {
 		return filepath.Clean(expandTilde(p))
 	}
+	settings := loadSurfSettingsOrDefault()
+	if p := strings.TrimSpace(settings.Paths.StateDir); p != "" {
+		return filepath.Clean(expandTilde(p))
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
 		return "/tmp/.surf"
 	}
 	return filepath.Join(home, ".surf")
+}
+
+func intOrFallback(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func containerProfileDir(profile string) string {
