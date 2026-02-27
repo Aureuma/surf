@@ -120,6 +120,9 @@ type hostProcessState struct {
 
 func main() {
 	if len(os.Args) < 2 {
+		// Best-effort bootstrap so a standalone surf install immediately has
+		// ~/.si/surf/settings.toml available for future configuration.
+		_, _ = loadSurfSettings()
 		fmt.Print(usageText)
 		os.Exit(1)
 	}
