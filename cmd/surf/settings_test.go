@@ -43,6 +43,17 @@ func TestSetSurfConfigValue(t *testing.T) {
 	}
 }
 
+func TestSetSurfConfigValueTunnelTargetURL(t *testing.T) {
+	settings := defaultSurfSettings()
+	target := "http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale"
+	if err := setSurfConfigValue(&settings, "tunnel.target_url", target); err != nil {
+		t.Fatalf("set tunnel.target_url: %v", err)
+	}
+	if settings.Tunnel.TargetURL != target {
+		t.Fatalf("tunnel.target_url=%q", settings.Tunnel.TargetURL)
+	}
+}
+
 func TestDefaultConfigUsesSurfSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SURF_SETTINGS_HOME", home)
@@ -104,5 +115,41 @@ func TestSurfStateDirUsesSettings(t *testing.T) {
 	}
 	if got := surfStateDir(); got != filepath.Join(home, "custom-surf-state") {
 		t.Fatalf("surfStateDir=%q", got)
+	}
+}
+
+func TestTunnelSettingsRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SURF_SETTINGS_HOME", home)
+	t.Setenv("SURF_SETTINGS_FILE", "")
+
+	want := defaultSurfSettings()
+	want.Tunnel.ContainerName = "surf-cloudflared-test"
+	want.Tunnel.TargetURL = "http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale"
+	want.Tunnel.Mode = "token"
+	want.Tunnel.Image = "cloudflare/cloudflared:2026.2.0"
+	want.Tunnel.VaultKey = "SURF_CLOUDFLARE_TUNNEL_TOKEN"
+	if err := saveSurfSettings(want); err != nil {
+		t.Fatalf("saveSurfSettings: %v", err)
+	}
+
+	got, err := loadSurfSettings()
+	if err != nil {
+		t.Fatalf("loadSurfSettings: %v", err)
+	}
+	if got.Tunnel.ContainerName != want.Tunnel.ContainerName {
+		t.Fatalf("tunnel.container_name=%q", got.Tunnel.ContainerName)
+	}
+	if got.Tunnel.TargetURL != want.Tunnel.TargetURL {
+		t.Fatalf("tunnel.target_url=%q", got.Tunnel.TargetURL)
+	}
+	if got.Tunnel.Mode != want.Tunnel.Mode {
+		t.Fatalf("tunnel.mode=%q", got.Tunnel.Mode)
+	}
+	if got.Tunnel.Image != want.Tunnel.Image {
+		t.Fatalf("tunnel.image=%q", got.Tunnel.Image)
+	}
+	if got.Tunnel.VaultKey != want.Tunnel.VaultKey {
+		t.Fatalf("tunnel.vault_key=%q", got.Tunnel.VaultKey)
 	}
 }
