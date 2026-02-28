@@ -1533,8 +1533,12 @@ func isContainerRunning(name string) (bool, string, error) {
 }
 
 func fetchContainerLogs(name string, tail int) string {
-	out, _ := runDockerOutput("logs", "--tail", strconv.Itoa(tail), strings.TrimSpace(name))
-	return out
+	cmd := exec.Command("docker", "logs", "--tail", strconv.Itoa(tail), strings.TrimSpace(name))
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+	_ = cmd.Run()
+	return strings.TrimSpace(combined.String())
 }
 
 func extractTryCloudflareURL(logText string) string {
