@@ -27,6 +27,18 @@ func TestExtractTryCloudflareURL(t *testing.T) {
 	}
 }
 
+func TestExtractTryCloudflareURLFromCloudflaredBanner(t *testing.T) {
+	logs := `
+2026-02-28T05:11:41Z INF +--------------------------------------------------------------------------------------------+
+2026-02-28T05:11:41Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
+2026-02-28T05:11:41Z INF |  https://alliance-naval-licenses-childrens.trycloudflare.com                               |
+2026-02-28T05:11:41Z INF +--------------------------------------------------------------------------------------------+
+`
+	if got := extractTryCloudflareURL(logs); got != "https://alliance-naval-licenses-childrens.trycloudflare.com" {
+		t.Fatalf("extractTryCloudflareURL got %q", got)
+	}
+}
+
 func TestMCPURL(t *testing.T) {
 	cfg := browserConfig{HostBind: "127.0.0.1", HostMCPPort: 8932}
 	if got := mcpURL(cfg); got != "http://127.0.0.1:8932/mcp" {
