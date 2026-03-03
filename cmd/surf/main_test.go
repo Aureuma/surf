@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -81,8 +82,14 @@ func TestHostLaunchArgsBase(t *testing.T) {
 func TestHostLaunchArgsRootNoDisplay(t *testing.T) {
 	args := hostLaunchArgs(18800, "/tmp/profile", true, "")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--no-sandbox") || !strings.Contains(joined, "--disable-setuid-sandbox") {
-		t.Fatalf("expected root sandbox flags: %v", args)
+	if runtime.GOOS == "linux" {
+		if !strings.Contains(joined, "--no-sandbox") || !strings.Contains(joined, "--disable-setuid-sandbox") {
+			t.Fatalf("expected root sandbox flags on linux: %v", args)
+		}
+	} else {
+		if strings.Contains(joined, "--no-sandbox") || strings.Contains(joined, "--disable-setuid-sandbox") {
+			t.Fatalf("unexpected linux-only root sandbox flags on %s: %v", runtime.GOOS, args)
+		}
 	}
 	if !strings.Contains(joined, "--headless=new") {
 		t.Fatalf("expected headless flag when DISPLAY is empty: %v", args)
