@@ -22,12 +22,12 @@ func TestSessionE2EChromeHeadless(t *testing.T) {
 	}
 
 	port := reserveTCPPort(t)
-	profileDir := filepath.Join(t.TempDir(), "chrome-profile")
-	if err := os.MkdirAll(profileDir, 0o755); err != nil {
-		t.Fatalf("mkdir profile: %v", err)
+	profileDir, err := os.MkdirTemp("", "surf-e2e-profile-*")
+	if err != nil {
+		t.Fatalf("mktemp profile: %v", err)
 	}
 
-	url := "data:text/html,<html><head><title>SurfE2E</title></head><body><input id='q' value=''><button id='btn' onclick=\"window.clicked='yes'\">go</button><p id='txt'>hello</p></body></html>"
+	url := "about:blank"
 	cmd := exec.Command(chromeBin,
 		"--headless=new",
 		fmt.Sprintf("--remote-debugging-port=%d", port),
@@ -46,6 +46,12 @@ func TestSessionE2EChromeHeadless(t *testing.T) {
 	defer func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
+		for i := 0; i < 20; i++ {
+			if err := os.RemoveAll(profileDir); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}()
 
 	waitForCDP(t, port, 15*time.Second)
@@ -53,7 +59,7 @@ func TestSessionE2EChromeHeadless(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	target, err := chooseChromeTarget(targets, "", "data:text/html", "")
+	target, err := chooseChromeTarget(targets, "", "", "")
 	if err != nil {
 		t.Fatalf("choose target: %v", err)
 	}
@@ -73,6 +79,12 @@ func TestSessionE2EChromeHeadless(t *testing.T) {
 		t.Fatalf("write session: %v", err)
 	}
 
+	if _, err := runSessionAction(s, sessionActionRequest{
+		Action: "eval",
+		Expr:   "document.title='SurfE2E'; document.body.innerHTML = \"<input id='q' value=''><button id='btn' onclick=\\\"window.clicked='yes'\\\">go</button><p id='txt'>hello</p>\"; 'ok'",
+	}); err != nil {
+		t.Fatalf("bootstrap dom action: %v", err)
+	}
 	titleResult, err := runSessionAction(s, sessionActionRequest{Action: "title"})
 	if err != nil {
 		t.Fatalf("title action: %v", err)
