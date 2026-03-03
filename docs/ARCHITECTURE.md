@@ -18,8 +18,8 @@
 - quick mode and token mode
 
 4. Integration layer
-- standalone CLI (`surf ...`)
-- SI bridge (`si surf ...`) as interface
+- internal surf runtime binary
+- SI bridge (`si surf ...`) as the public interface
 - vault-oriented secret plumbing through `si vault`
 
 Design goals:
