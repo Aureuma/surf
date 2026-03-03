@@ -20,11 +20,12 @@ const (
 )
 
 type surfSettings struct {
-	SchemaVersion int                  `toml:"schema_version" json:"schema_version"`
-	Paths         surfSettingsPaths    `toml:"paths" json:"paths"`
-	Browser       surfBrowserSettings  `toml:"browser" json:"browser"`
-	Tunnel        surfTunnelSettings   `toml:"tunnel" json:"tunnel"`
-	Metadata      surfSettingsMetadata `toml:"metadata,omitempty" json:"metadata,omitempty"`
+	SchemaVersion   int                         `toml:"schema_version" json:"schema_version"`
+	Paths           surfSettingsPaths           `toml:"paths" json:"paths"`
+	Browser         surfBrowserSettings         `toml:"browser" json:"browser"`
+	ExistingSession surfExistingSessionSettings `toml:"existing_session" json:"existing_session"`
+	Tunnel          surfTunnelSettings          `toml:"tunnel" json:"tunnel"`
+	Metadata        surfSettingsMetadata        `toml:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 type surfSettingsMetadata struct {
@@ -62,6 +63,16 @@ type surfTunnelSettings struct {
 	VaultKey      string `toml:"vault_key,omitempty" json:"vault_key,omitempty"`
 }
 
+type surfExistingSessionSettings struct {
+	Enabled          bool   `toml:"enabled" json:"enabled"`
+	DefaultBrowser   string `toml:"default_browser,omitempty" json:"default_browser,omitempty"`
+	Mode             string `toml:"mode,omitempty" json:"mode,omitempty"`
+	ChromeHost       string `toml:"chrome_host,omitempty" json:"chrome_host,omitempty"`
+	ChromeCDPPort    int    `toml:"chrome_cdp_port,omitempty" json:"chrome_cdp_port,omitempty"`
+	AttachTimeoutSec int    `toml:"attach_timeout_seconds,omitempty" json:"attach_timeout_seconds,omitempty"`
+	ActionTimeoutSec int    `toml:"action_timeout_seconds,omitempty" json:"action_timeout_seconds,omitempty"`
+}
+
 func defaultSurfSettings() surfSettings {
 	return surfSettings{
 		SchemaVersion: surfSettingsSchemaVersion,
@@ -84,6 +95,15 @@ func defaultSurfSettings() surfSettings {
 			MCPVersion:     defaultMCPVersion,
 			BrowserChannel: "chromium",
 			AllowedHosts:   "*",
+		},
+		ExistingSession: surfExistingSessionSettings{
+			Enabled:          true,
+			DefaultBrowser:   "chrome",
+			Mode:             sessionModeReadOnly,
+			ChromeHost:       "127.0.0.1",
+			ChromeCDPPort:    defaultHostCDPPort,
+			AttachTimeoutSec: 8,
+			ActionTimeoutSec: 15,
 		},
 		Tunnel: surfTunnelSettings{
 			ContainerName: defaultTunnelName,
@@ -148,14 +168,40 @@ func applySurfSettingsDefaults(settings *surfSettings) {
 	if strings.TrimSpace(settings.Browser.AllowedHosts) == "" {
 		settings.Browser.AllowedHosts = "*"
 	}
+	if strings.TrimSpace(settings.ExistingSession.DefaultBrowser) == "" {
+		settings.ExistingSession.DefaultBrowser = "chrome"
+	}
+	browser := strings.ToLower(strings.TrimSpace(settings.ExistingSession.DefaultBrowser))
+	if browser != "chrome" && browser != "safari" {
+		settings.ExistingSession.DefaultBrowser = "chrome"
+	}
+	if strings.TrimSpace(settings.ExistingSession.Mode) == "" {
+		settings.ExistingSession.Mode = sessionModeReadOnly
+	}
+	mode := strings.ToLower(strings.TrimSpace(settings.ExistingSession.Mode))
+	if mode != sessionModeReadOnly && mode != sessionModeInteractive {
+		settings.ExistingSession.Mode = sessionModeReadOnly
+	}
+	if strings.TrimSpace(settings.ExistingSession.ChromeHost) == "" {
+		settings.ExistingSession.ChromeHost = "127.0.0.1"
+	}
+	if settings.ExistingSession.ChromeCDPPort <= 0 {
+		settings.ExistingSession.ChromeCDPPort = defaultHostCDPPort
+	}
+	if settings.ExistingSession.AttachTimeoutSec <= 0 {
+		settings.ExistingSession.AttachTimeoutSec = 8
+	}
+	if settings.ExistingSession.ActionTimeoutSec <= 0 {
+		settings.ExistingSession.ActionTimeoutSec = 15
+	}
 	if strings.TrimSpace(settings.Tunnel.ContainerName) == "" {
 		settings.Tunnel.ContainerName = defaultTunnelName
 	}
 	if strings.TrimSpace(settings.Tunnel.Mode) == "" {
 		settings.Tunnel.Mode = "quick"
 	}
-	mode := strings.ToLower(strings.TrimSpace(settings.Tunnel.Mode))
-	if mode != "quick" && mode != "token" {
+	tunnelMode := strings.ToLower(strings.TrimSpace(settings.Tunnel.Mode))
+	if tunnelMode != "quick" && tunnelMode != "token" {
 		settings.Tunnel.Mode = "quick"
 	}
 	if strings.TrimSpace(settings.Tunnel.Image) == "" {
@@ -332,6 +378,44 @@ func setSurfConfigValue(settings *surfSettings, key, value string) error {
 		settings.Tunnel.Image = v
 	case "tunnel.vault_key":
 		settings.Tunnel.VaultKey = v
+	case "existing_session.enabled":
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid bool for %s: %w", key, err)
+		}
+		settings.ExistingSession.Enabled = enabled
+	case "existing_session.default_browser":
+		browser := strings.ToLower(v)
+		if browser != "chrome" && browser != "safari" {
+			return fmt.Errorf("invalid browser %q (expected chrome|safari)", v)
+		}
+		settings.ExistingSession.DefaultBrowser = browser
+	case "existing_session.mode":
+		mode := strings.ToLower(v)
+		if mode != sessionModeReadOnly && mode != sessionModeInteractive {
+			return fmt.Errorf("invalid mode %q (expected read_only|interactive)", v)
+		}
+		settings.ExistingSession.Mode = mode
+	case "existing_session.chrome_host":
+		settings.ExistingSession.ChromeHost = v
+	case "existing_session.chrome_cdp_port":
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid int for %s: %w", key, err)
+		}
+		settings.ExistingSession.ChromeCDPPort = port
+	case "existing_session.attach_timeout_seconds":
+		seconds, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid int for %s: %w", key, err)
+		}
+		settings.ExistingSession.AttachTimeoutSec = seconds
+	case "existing_session.action_timeout_seconds":
+		seconds, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid int for %s: %w", key, err)
+		}
+		settings.ExistingSession.ActionTimeoutSec = seconds
 	default:
 		return fmt.Errorf("unsupported key: %s", key)
 	}
