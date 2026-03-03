@@ -6,6 +6,7 @@ It provides:
 - Dockerized headed Playwright MCP runtime
 - persisted browser profiles (container + host)
 - noVNC access for visual browser sessions
+- existing browser-session attach and actions (Chrome CDP)
 - optional Cloudflare tunnel exposure for noVNC
 - optional hosted token tunnel mode with secret retrieval from `si vault`
 - local headed host browser control (Chromium-based) for macOS/Linux
@@ -50,6 +51,20 @@ si surf host start --profile work
 si surf host status --profile work
 si surf host stop --profile work
 ```
+
+## Existing Session Attach (Chrome)
+
+Attach to an already-open Chrome/Chromium tab that has CDP enabled:
+
+```bash
+si surf session discover
+si surf session attach --id <target-id>
+si surf session act --session <name> --action title
+si surf session act --session <name> --action screenshot --out ./shot.png
+si surf session detach --session <name>
+```
+
+`read_only` mode is default. Write actions (`click`, `type`) require `--mode interactive` during attach.
 
 ## Settings
 
