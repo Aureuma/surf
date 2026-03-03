@@ -51,6 +51,8 @@ Examples:
 `
 
 const (
+	surfWrapperEnvName    = "SI_SURF_WRAPPED"
+	surfStandaloneBypass  = "SURF_STANDALONE_UNSAFE"
 	defaultImage          = "ghcr.io/aureuma/surf-browser:local"
 	defaultContainer      = "surf-playwright-mcp-headed"
 	defaultNetwork        = "si"
@@ -120,6 +122,7 @@ type hostProcessState struct {
 }
 
 func main() {
+	requireSIWrapper()
 	if len(os.Args) < 2 {
 		// Best-effort bootstrap so a standalone surf install immediately has
 		// ~/.si/surf/settings.toml available for future configuration.
@@ -164,6 +167,19 @@ func main() {
 	default:
 		fatal(fmt.Errorf("unknown command: %s", cmd))
 	}
+}
+
+func requireSIWrapper() {
+	if strings.TrimSpace(os.Getenv(surfWrapperEnvName)) == "1" {
+		return
+	}
+	if strings.TrimSpace(os.Getenv(surfStandaloneBypass)) == "1" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "surf is managed through `si surf` and is not a standalone public CLI.")
+	fmt.Fprintln(os.Stderr, "Run: si surf <command> [args]")
+	fmt.Fprintf(os.Stderr, "For local development only, set %s=1.\n", surfStandaloneBypass)
+	os.Exit(2)
 }
 
 func defaultConfig() browserConfig {

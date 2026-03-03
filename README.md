@@ -1,6 +1,6 @@
 # surf
 
-`surf` is a Go-first browser runtime for SI and standalone automation.
+`surf` is a Go-first browser runtime for SI.
 
 It provides:
 - Dockerized headed Playwright MCP runtime
@@ -15,16 +15,16 @@ It provides:
 ## Install
 
 ```bash
-go install github.com/Aureuma/surf/cmd/surf@latest
+go install github.com/Aureuma/si/tools/si@latest
 ```
 
 ## Quick start
 
 ```bash
-surf build
-surf start --profile default
-surf status
-surf logs
+si surf build
+si surf start --profile default
+si surf status
+si surf logs
 ```
 
 Default endpoints:
@@ -46,9 +46,9 @@ Use `--profile` across runtime commands to switch profile context.
 `surf` can launch a headed local Chromium-based browser with isolated profile + CDP:
 
 ```bash
-surf host start --profile work
-surf host status --profile work
-surf host stop --profile work
+si surf host start --profile work
+si surf host status --profile work
+si surf host stop --profile work
 ```
 
 ## Settings
@@ -62,11 +62,11 @@ The directory and file are auto-created on first config/runtime usage.
 Common commands:
 
 ```bash
-surf config path
-surf config init
-surf config show --json
-surf config set --key tunnel.mode --value token
-surf config set --key tunnel.vault_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
+si surf config path
+si surf config init
+si surf config show --json
+si surf config set --key tunnel.mode --value token
+si surf config set --key tunnel.vault_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
 ```
 
 ## Public noVNC exposure over Cloudflare
@@ -74,15 +74,15 @@ surf config set --key tunnel.vault_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
 Quick ephemeral tunnel:
 
 ```bash
-surf tunnel start --mode quick
-surf tunnel status
-surf tunnel logs
+si surf tunnel start --mode quick
+si surf tunnel status
+si surf tunnel logs
 ```
 
 Named/managed token mode (token from env or si vault):
 
 ```bash
-surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
+si surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
 ```
 
 Token resolution order:
@@ -93,9 +93,9 @@ Token resolution order:
 ## Chrome extension scaffold
 
 ```bash
-surf extension install
-surf extension path
-surf extension doctor
+si surf extension install
+si surf extension path
+si surf extension doctor
 ```
 
 ## SI integration
@@ -105,6 +105,8 @@ surf extension doctor
 ```bash
 si surf <...>
 ```
+
+`surf` is an internal runtime binary and should be invoked through `si surf`.
 
 `si surf` can hydrate selected `SURF_*` secrets from `si vault` when present.
 It can also manage wrapper defaults in `~/.si/settings.toml` via:
