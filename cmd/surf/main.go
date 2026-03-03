@@ -31,6 +31,7 @@ Commands:
   stop         Stop/remove runtime container
   status       Check runtime health
   logs         Stream runtime logs
+  session      Attach and act on existing browser sessions
   config       Manage surf settings file
   proxy        Start MCP path-compat proxy
   host         Manage headed host browser (macOS/Linux)
@@ -44,6 +45,9 @@ Examples:
   surf build
   surf start --profile default
   surf status --json
+  surf session discover
+  surf session attach --id <target-id>
+  surf session act --session <name> --action title
   surf host start --profile work
   surf tunnel start --mode quick
   surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
@@ -156,6 +160,8 @@ func main() {
 		cmdStatus(args)
 	case "logs":
 		cmdLogs(args)
+	case "session":
+		cmdSession(args)
 	case "proxy":
 		cmdProxy(args)
 	case "host":
