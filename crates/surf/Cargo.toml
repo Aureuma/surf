@@ -1,6 +1,7 @@
 [package]
 name = "surf"
 version = "0.1.1"
+default-run = "surf"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

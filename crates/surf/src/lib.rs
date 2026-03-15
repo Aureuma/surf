@@ -4,6 +4,7 @@ pub mod constants;
 pub mod extension;
 pub mod host;
 pub mod paths;
+pub mod proxy;
 pub mod runtime;
 pub mod session;
 pub mod settings;

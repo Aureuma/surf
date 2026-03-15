@@ -1,3 +1,12 @@
+FROM rust:1-bookworm AS surf-browser-entrypoint-build
+
+WORKDIR /workspace
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+RUN cargo build --release --locked -p surf --bin surf-browser-entrypoint
+
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
 USER root
@@ -18,9 +27,9 @@ RUN apt-get update \
 RUN npx -y "playwright@${PW_VERSION_STABLE}" install chromium \
   && npx -y "playwright@${PW_VERSION}" install chromium
 
-COPY entrypoint.sh /usr/local/bin/surf-browser-entrypoint.sh
+COPY --from=surf-browser-entrypoint-build /workspace/target/release/surf-browser-entrypoint /usr/local/bin/surf-browser-entrypoint
 
-RUN chmod +x /usr/local/bin/surf-browser-entrypoint.sh \
+RUN chmod +x /usr/local/bin/surf-browser-entrypoint \
   && mkdir -p /home/pwuser/.vnc /home/pwuser/.playwright-mcp-profile \
   && chown -R pwuser:pwuser /home/pwuser/.vnc /home/pwuser/.playwright-mcp-profile
 
@@ -28,4 +37,4 @@ USER pwuser
 
 EXPOSE 8931 6080 5900
 
-ENTRYPOINT ["/usr/local/bin/surf-browser-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/surf-browser-entrypoint"]

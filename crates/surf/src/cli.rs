@@ -9,6 +9,7 @@ use crate::host::{
     default_host_profile_name, host_logs, host_status, start_host_browser, stop_host_browser,
 };
 use crate::paths::sanitize_profile_name;
+use crate::proxy::run_proxy;
 use crate::runtime::{
     build_runtime, start_runtime, status_runtime, stop_runtime, stream_container_logs,
 };
@@ -49,7 +50,7 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    Proxy,
+    Proxy(ProxyArgs),
     Host {
         #[command(subcommand)]
         command: HostCommand,
@@ -393,6 +394,16 @@ struct ExtensionDoctorArgs {
     json: bool,
 }
 
+#[derive(Debug, Args)]
+struct ProxyArgs {
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+    #[arg(long, default_value_t = 8931)]
+    port: u16,
+    #[arg(long, default_value = "http://127.0.0.1:8932")]
+    upstream: String,
+}
+
 pub fn run(raw_args: &[String]) -> Result<i32> {
     if raw_args.is_empty() {
         print!("{USAGE_TEXT}");
@@ -429,7 +440,10 @@ pub fn run(raw_args: &[String]) -> Result<i32> {
         Command::Status(args) => handle_status(args),
         Command::Logs(args) => handle_logs(args),
         Command::Session { command } => handle_session(command),
-        Command::Proxy => not_yet("proxy"),
+        Command::Proxy(args) => {
+            run_proxy(&args.bind, args.port, &args.upstream)?;
+            Ok(0)
+        }
         Command::Host { command } => handle_host(command),
         Command::Tunnel { command } => handle_tunnel(command),
         Command::Extension { command } => handle_extension(command),
@@ -966,10 +980,6 @@ fn handle_session(command: SessionCommand) -> Result<i32> {
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
-}
-
-fn not_yet(command: &str) -> Result<i32> {
-    bail!("{command} is not implemented in Rust yet")
 }
 
 fn apply_runtime_overrides(cfg: &mut BrowserConfig, overrides: &RuntimeOverrides) -> bool {
