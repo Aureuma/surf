@@ -8,8 +8,19 @@ use crate::extension::{extension_doctor, extension_path, install_extension};
 use crate::host::{
     default_host_profile_name, host_logs, host_status, start_host_browser, stop_host_browser,
 };
+use crate::paths::sanitize_profile_name;
 use crate::runtime::{
     build_runtime, start_runtime, status_runtime, stop_runtime, stream_container_logs,
+};
+use crate::session::{
+    AttachedSession, SessionActionRequest, SessionHumanOptions, choose_chrome_target,
+    current_timestamp_rfc3339, default_session_attach_timeout, default_session_browser,
+    default_session_chrome_host, default_session_chrome_port, default_session_human_max_delay_ms,
+    default_session_human_min_delay_ms, default_session_human_mouse_steps,
+    default_session_human_scroll_step_px, default_session_human_type_max_delay_ms,
+    default_session_human_type_min_delay_ms, default_session_humanize, default_session_mode,
+    delete_attached_session, discover_chrome_targets, list_attached_sessions,
+    normalize_session_mode, read_attached_session, run_session_action, write_attached_session,
 };
 use crate::settings::{
     default_surf_settings, load_surf_settings_or_default, save_surf_settings, set_surf_config_value,
@@ -30,7 +41,10 @@ enum Command {
     Stop(StopArgs),
     Status(StatusArgs),
     Logs(LogsArgs),
-    Session,
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -83,6 +97,20 @@ enum ExtensionCommand {
     Doctor(ExtensionDoctorArgs),
 }
 
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    Discover(SessionDiscoverArgs),
+    Scan(SessionDiscoverArgs),
+    Attach(SessionAttachArgs),
+    List(SessionListArgs),
+    Ls(SessionListArgs),
+    Detach(SessionDetachArgs),
+    Rm(SessionDetachArgs),
+    Remove(SessionDetachArgs),
+    Act(SessionActArgs),
+    Action(SessionActArgs),
+}
+
 #[derive(Debug, Args)]
 struct ConfigShowArgs {
     #[arg(long)]
@@ -103,6 +131,90 @@ struct ConfigSetArgs {
 struct ConfigInitArgs {
     #[arg(long)]
     force: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct SessionDiscoverArgs {
+    #[arg(long, default_value_t = default_session_browser())]
+    browser: String,
+    #[arg(long, default_value_t = default_session_chrome_host())]
+    host: String,
+    #[arg(long = "cdp-port", default_value_t = default_session_chrome_port())]
+    cdp_port: i32,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct SessionAttachArgs {
+    #[arg(long, default_value_t = default_session_browser())]
+    browser: String,
+    #[arg(long, default_value_t = default_session_chrome_host())]
+    host: String,
+    #[arg(long = "cdp-port", default_value_t = default_session_chrome_port())]
+    cdp_port: i32,
+    #[arg(long = "id")]
+    target_id: Option<String>,
+    #[arg(long = "url-contains")]
+    url_contains: Option<String>,
+    #[arg(long = "title-contains")]
+    title_contains: Option<String>,
+    #[arg(long = "session")]
+    session_name: Option<String>,
+    #[arg(long, default_value_t = default_session_mode())]
+    mode: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct SessionListArgs {
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct SessionDetachArgs {
+    #[arg(long = "session")]
+    session_name: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct SessionActArgs {
+    #[arg(long = "session")]
+    session_name: String,
+    #[arg(long)]
+    action: String,
+    #[arg(long)]
+    selector: Option<String>,
+    #[arg(long)]
+    text: Option<String>,
+    #[arg(long)]
+    expr: Option<String>,
+    #[arg(long)]
+    out: Option<String>,
+    #[arg(long = "delta-y", default_value_t = 0)]
+    delta_y: i32,
+    #[arg(long, default_value_t = 0)]
+    steps: i32,
+    #[arg(long, default_value_t = default_session_humanize(), action = ArgAction::Set)]
+    human: bool,
+    #[arg(long = "min-delay-ms", default_value_t = default_session_human_min_delay_ms())]
+    min_delay_ms: i32,
+    #[arg(long = "max-delay-ms", default_value_t = default_session_human_max_delay_ms())]
+    max_delay_ms: i32,
+    #[arg(long = "type-min-delay-ms", default_value_t = default_session_human_type_min_delay_ms())]
+    type_min_delay_ms: i32,
+    #[arg(long = "type-max-delay-ms", default_value_t = default_session_human_type_max_delay_ms())]
+    type_max_delay_ms: i32,
+    #[arg(long = "mouse-steps", default_value_t = default_session_human_mouse_steps())]
+    mouse_steps: i32,
+    #[arg(long = "scroll-step-px", default_value_t = default_session_human_scroll_step_px())]
+    scroll_step_px: i32,
     #[arg(long)]
     json: bool,
 }
@@ -316,7 +428,7 @@ pub fn run(raw_args: &[String]) -> Result<i32> {
         Command::Stop(args) => handle_stop(args),
         Command::Status(args) => handle_status(args),
         Command::Logs(args) => handle_logs(args),
-        Command::Session => not_yet("session"),
+        Command::Session { command } => handle_session(command),
         Command::Proxy => not_yet("proxy"),
         Command::Host { command } => handle_host(command),
         Command::Tunnel { command } => handle_tunnel(command),
@@ -681,6 +793,172 @@ fn handle_extension(command: ExtensionCommand) -> Result<i32> {
                 );
             }
             Ok(if doctor.ok { 0 } else { 1 })
+        }
+    }
+}
+
+fn handle_session(command: SessionCommand) -> Result<i32> {
+    match command {
+        SessionCommand::Discover(args) | SessionCommand::Scan(args) => {
+            let adapter = args.browser.trim().to_lowercase();
+            match adapter.as_str() {
+                "chrome" | "chromium" => {
+                    let targets = discover_chrome_targets(
+                        &args.host,
+                        args.cdp_port,
+                        default_session_attach_timeout(),
+                    )?;
+                    if args.json {
+                        print_json(&serde_json::json!({
+                            "ok": true,
+                            "browser": "chrome",
+                            "targets": targets,
+                        }))?;
+                    } else if targets.is_empty() {
+                        println!("no browser targets discovered");
+                    } else {
+                        println!("available browser targets:");
+                        for (index, target) in targets.iter().enumerate() {
+                            let title = if target.title.trim().is_empty() {
+                                "(untitled)"
+                            } else {
+                                target.title.trim()
+                            };
+                            println!("{}. [{}] {}", index + 1, target.id, title);
+                            println!("   {}", target.url.trim());
+                        }
+                    }
+                    Ok(0)
+                }
+                "safari" => bail!(
+                    "safari existing-session discovery is not implemented yet; use chrome/chromium"
+                ),
+                _ => bail!(
+                    "unsupported browser {:?} (expected chrome|safari)",
+                    args.browser
+                ),
+            }
+        }
+        SessionCommand::Attach(args) => {
+            let adapter = args.browser.trim().to_lowercase();
+            let mode = normalize_session_mode(&args.mode)?;
+            match adapter.as_str() {
+                "chrome" | "chromium" => {
+                    let targets = discover_chrome_targets(
+                        &args.host,
+                        args.cdp_port,
+                        default_session_attach_timeout(),
+                    )?;
+                    let target = choose_chrome_target(
+                        &targets,
+                        args.target_id.as_deref().unwrap_or_default(),
+                        args.url_contains.as_deref().unwrap_or_default(),
+                        args.title_contains.as_deref().unwrap_or_default(),
+                    )?;
+                    let session_name = args
+                        .session_name
+                        .as_deref()
+                        .map(sanitize_profile_name)
+                        .unwrap_or_else(|| {
+                            sanitize_profile_name(if !target.id.is_empty() {
+                                &target.id
+                            } else {
+                                &target.title
+                            })
+                        });
+                    let session = AttachedSession {
+                        session: session_name.clone(),
+                        browser: "chrome".to_owned(),
+                        mode,
+                        target_id: target.id.clone(),
+                        title: target.title.clone(),
+                        url: target.url.clone(),
+                        ws_url: target.websocket_debugger_url.clone(),
+                        cdp_host: args.host.trim().to_owned(),
+                        cdp_port: args.cdp_port,
+                        created_at: current_timestamp_rfc3339(),
+                    };
+                    write_attached_session(&session)?;
+                    if args.json {
+                        print_json(&serde_json::json!({"ok": true, "session": session}))?;
+                    } else {
+                        println!("attached: {} ({})", session.session, session.mode);
+                        println!("  target_id={}", session.target_id);
+                        println!("  title={}", session.title.trim());
+                        println!("  url={}", session.url.trim());
+                    }
+                    Ok(0)
+                }
+                "safari" => bail!(
+                    "safari existing-session attach is not implemented yet; use chrome/chromium"
+                ),
+                _ => bail!(
+                    "unsupported browser {:?} (expected chrome|safari)",
+                    args.browser
+                ),
+            }
+        }
+        SessionCommand::List(args) | SessionCommand::Ls(args) => {
+            let sessions = list_attached_sessions()?;
+            if args.json {
+                print_json(&serde_json::json!({"ok": true, "sessions": sessions}))?;
+            } else if sessions.is_empty() {
+                println!("no attached sessions");
+            } else {
+                for (index, session) in sessions.iter().enumerate() {
+                    println!(
+                        "{}. {} [{}/{}]",
+                        index + 1,
+                        session.session,
+                        session.browser,
+                        session.mode
+                    );
+                    println!("   {}", session.url.trim());
+                }
+            }
+            Ok(0)
+        }
+        SessionCommand::Detach(args) | SessionCommand::Rm(args) | SessionCommand::Remove(args) => {
+            let session_name = sanitize_profile_name(&args.session_name);
+            delete_attached_session(&session_name)?;
+            if args.json {
+                print_json(&serde_json::json!({"ok": true, "session": session_name}))?;
+            } else {
+                println!("detached: {session_name}");
+            }
+            Ok(0)
+        }
+        SessionCommand::Act(args) | SessionCommand::Action(args) => {
+            let session = read_attached_session(&sanitize_profile_name(&args.session_name))?;
+            let result = run_session_action(
+                &session,
+                &SessionActionRequest {
+                    action: args.action.trim().to_lowercase(),
+                    selector: args.selector.unwrap_or_default(),
+                    text: args.text.unwrap_or_default(),
+                    expr: args.expr.unwrap_or_default(),
+                    out: args.out.unwrap_or_default(),
+                    delta_y: args.delta_y,
+                    steps: args.steps,
+                    human: SessionHumanOptions {
+                        enabled: args.human,
+                        min_delay_ms: args.min_delay_ms,
+                        max_delay_ms: args.max_delay_ms,
+                        type_min_delay: args.type_min_delay_ms,
+                        type_max_delay: args.type_max_delay_ms,
+                        mouse_steps: args.mouse_steps,
+                        scroll_step_px: args.scroll_step_px,
+                    },
+                },
+            )?;
+            if args.json {
+                print_json(&serde_json::json!({"ok": true, "result": result}))?;
+            } else if result.action == "screenshot" {
+                println!("screenshot: {}", result.output);
+            } else {
+                println!("{}: {}", result.action, result.value.unwrap_or_default());
+            }
+            Ok(0)
         }
     }
 }

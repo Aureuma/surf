@@ -342,7 +342,7 @@ mod tests {
     #[test]
     #[serial]
     fn default_host_profile_name_prefers_settings_then_env() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         set_env(
             "SURF_SETTINGS_HOME",
