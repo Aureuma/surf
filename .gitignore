@@ -1,6 +1,7 @@
 tickets/
 /bin/
 /dist/
+/target/
 .artifacts/
 *.log
 *.tmp
