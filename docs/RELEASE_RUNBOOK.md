@@ -20,22 +20,22 @@ This repo uses Git tags + GitHub Releases. Follow this order to avoid broken or 
 1. Add a new top section for the version/date, e.g.:
    - `## [vX.Y.Z] - YYYY-MM-DD`
 1. Add user-facing bullets grouped by area.
-1. Update `cmd/surf/version.go`:
-   - `const surfVersion = "vX.Y.Z"`
+1. Update `crates/surf/Cargo.toml`:
+   - `version = "X.Y.Z"`
 
-## 3. Validate Release Inputs Locally
+## 3. Validate Release Inputs (CI-only tests)
 
-1. Run tests:
-   - `go test ./...`
 1. Validate tag/version alignment:
-   - `tools/release/validate-release-version.sh --tag vX.Y.Z`
-1. Build local preflight assets:
-   - `tools/release/build-cli-release-assets.sh --version vX.Y.Z --out-dir .artifacts/release-preflight`
+   - `cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z`
+1. Run tests on GitHub Actions only:
+   - `cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref main --workflow ci.yml`
+1. Build a local native preflight asset on a matching host (optional packaging sanity check, not test execution):
+   - `cargo run --locked -p xtask -- build-release-asset --version vX.Y.Z --target <native-target> --archive-suffix <archive-suffix> --out-dir .artifacts/release-preflight`
 
 ## 4. Commit
 
 1. Commit release prep changes:
-   - `git add CHANGELOG.md cmd/surf/version.go docs/RELEASE.md docs/RELEASE_RUNBOOK.md docs/RELEASING.md`
+   - `git add CHANGELOG.md Cargo.lock crates/surf/Cargo.toml docs/RELEASE.md docs/RELEASE_RUNBOOK.md docs/RELEASING.md`
    - `git commit -m "release: vX.Y.Z"`
 
 ## 5. Tag
@@ -65,7 +65,7 @@ gh release create vX.Y.Z \
 
 When the release is published, workflow `.github/workflows/cli-release-assets.yml` auto-runs and:
 - validates tag/version alignment
-- builds linux/macos amd64 + arm64 CLI archives
+- builds linux/macos amd64 + arm64 CLI archives on matching native runners
 - generates `checksums.txt`
 - uploads release assets to GitHub Release
 - publishes browser image to `ghcr.io/aureuma/surf-browser`
@@ -79,14 +79,10 @@ gh workflow run "CLI Release Assets" -R Aureuma/surf -f tag=vX.Y.Z
 
 ## 8. Post-release Checks
 
-- Local version:
-  - `surf version`
-- Runtime smoke:
-  - `surf start --profile default`
-  - `surf status --json`
-  - `surf stop --profile default`
 - Workflow status:
   - `gh run list --workflow "CLI Release Assets" --repo Aureuma/surf --limit 1`
+- CI workflow status:
+  - `gh run list --workflow "CI" --repo Aureuma/surf --limit 1`
 - Release assets:
   - `gh release view vX.Y.Z --repo Aureuma/surf --json assets --jq '.assets[].name'`
   - Confirm:
