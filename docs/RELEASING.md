@@ -66,6 +66,7 @@ git pull --ff-only
 ```bash
 cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z
 cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref main --workflow ci.yml
+cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref vX.Y.Z --workflow cli-release-assets --workflow-input tag=vX.Y.Z
 cargo run --locked -p xtask -- build-release-asset --version vX.Y.Z --target <native-target> --archive-suffix <archive-suffix> --out-dir .artifacts/release-preflight
 git add CHANGELOG.md Cargo.lock crates/surf/Cargo.toml docs/RELEASE.md docs/RELEASE_RUNBOOK.md docs/RELEASING.md
 git commit -m "release: vX.Y.Z"

@@ -67,6 +67,8 @@ struct DispatchCiArgs {
     r#ref: Option<String>,
     #[arg(long, default_value = "ci.yml")]
     workflow: String,
+    #[arg(long = "workflow-input")]
+    workflow_input: Vec<String>,
     #[arg(long = "no-wait")]
     no_wait: bool,
 }
@@ -228,7 +230,24 @@ fn dispatch_ci(args: DispatchCiArgs) -> Result<()> {
         Some(reference) => reference,
         None => command_output("git", &["rev-parse", "--abbrev-ref", "HEAD"])?,
     };
-    let sha = command_output("git", [format!("{reference}^{{commit}}")].as_slice())?;
+    let sha = command_output(
+        "git",
+        &["rev-parse", &format!("{reference}^{{commit}}")],
+    )?;
+
+    let mut workflow_run_args = vec![
+        "workflow".to_owned(),
+        "run".to_owned(),
+        args.workflow.clone(),
+        "--repo".to_owned(),
+        args.repo.clone(),
+        "--ref".to_owned(),
+        reference.clone(),
+    ];
+    for field in parse_workflow_inputs(&args.workflow_input)? {
+        workflow_run_args.push("--field".to_owned());
+        workflow_run_args.push(format!("{}={}", field.0, field.1));
+    }
 
     println!(
         "Dispatching workflow={} repo={} ref={} sha={}",
@@ -236,15 +255,7 @@ fn dispatch_ci(args: DispatchCiArgs) -> Result<()> {
     );
     run_command(
         "gh",
-        &[
-            "workflow",
-            "run",
-            &args.workflow,
-            "--repo",
-            &args.repo,
-            "--ref",
-            &reference,
-        ],
+        workflow_run_args.as_slice(),
     )?;
 
     if args.no_wait {
@@ -301,6 +312,19 @@ fn dispatch_ci(args: DispatchCiArgs) -> Result<()> {
     }
     println!("CI run {} succeeded.", run_id.trim());
     Ok(())
+}
+
+fn parse_workflow_inputs(inputs: &[String]) -> Result<Vec<(String, String)>> {
+    inputs
+        .iter()
+        .map(|input| {
+            input
+                .split_once('=')
+                .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+                .filter(|(key, _)| !key.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("workflow input must be KEY=VALUE, got: {input}"))
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -362,4 +386,83 @@ where
         bail!("{program} command failed");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_workflow_inputs_accepts_key_value_pairs() {
+        let parsed = parse_workflow_inputs(&[
+            "tag=v0.1.1".to_string(),
+            "release=true".to_string(),
+        ])
+        .expect("workflow input parse");
+        assert_eq!(parsed[0], ("tag".to_string(), "v0.1.1".to_string()));
+        assert_eq!(parsed[1], ("release".to_string(), "true".to_string()));
+    }
+
+    #[test]
+    fn parse_workflow_inputs_rejects_invalid_entry() {
+        let error = parse_workflow_inputs(&["invalid".to_string()]).expect_err("invalid input");
+        assert!(error.to_string().contains("KEY=VALUE"));
+    }
+
+    #[test]
+    fn native_release_targets_for_current_host_is_supported() {
+        let targets = native_release_targets().expect("supported host");
+        let (target, suffix) = targets[0];
+        match (env::consts::OS, env::consts::ARCH) {
+            ("linux", "x86_64") => {
+                assert_eq!(target, "x86_64-unknown-linux-gnu");
+                assert_eq!(suffix, "linux_amd64");
+            }
+            ("linux", "aarch64") => {
+                assert_eq!(target, "aarch64-unknown-linux-gnu");
+                assert_eq!(suffix, "linux_arm64");
+            }
+            ("macos", "x86_64") => {
+                assert_eq!(target, "x86_64-apple-darwin");
+                assert_eq!(suffix, "darwin_amd64");
+            }
+            ("macos", "aarch64") => {
+                assert_eq!(target, "aarch64-apple-darwin");
+                assert_eq!(suffix, "darwin_arm64");
+            }
+            (os, arch) => panic!("unsupported host for this test: {os}/{arch}"),
+        }
+    }
+
+    #[test]
+    fn validate_release_version_matches_current_constant() {
+        assert!(validate_release_version(surf::constants::SURF_VERSION).is_ok());
+        assert!(validate_release_version("v0.0.0").is_err());
+    }
+
+    #[test]
+    fn write_checksums_generates_sorted_sha_entries() {
+        let mut work_dir = std::env::temp_dir();
+        let suffix = format!("surf-xtask-checksums-{}", std::process::id());
+        work_dir.push(suffix);
+        let _ = std::fs::remove_dir_all(&work_dir);
+        std::fs::create_dir_all(&work_dir).expect("temp dir");
+        let first = work_dir.join("surf_0.1.1_darwin_amd64.tar.gz");
+        let second = work_dir.join("surf_0.1.1_darwin_arm64.tar.gz");
+
+        std::fs::write(&first, b"darwin amd64")
+            .expect("write first test archive");
+        std::fs::write(&second, b"darwin arm64")
+            .expect("write second test archive");
+
+        write_checksums(work_dir.as_path()).expect("write checksums");
+
+        let checksums = std::fs::read_to_string(work_dir.join("checksums.txt"))
+            .expect("read checksums");
+        let lines: Vec<_> = checksums.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with("surf_0.1.1_darwin_amd64.tar.gz"));
+        assert!(lines[1].ends_with("surf_0.1.1_darwin_arm64.tar.gz"));
+        let _ = std::fs::remove_dir_all(&work_dir);
+    }
 }
