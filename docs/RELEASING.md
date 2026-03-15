@@ -59,15 +59,15 @@ git pull --ff-only
 
 ### 3) Bump code version
 
-- Update `cmd/surf/version.go` (`surfVersion`).
+- Update `crates/surf/Cargo.toml` (`version`).
 
-### 4) Validate and commit release prep
+### 4) Validate on GitHub Actions and commit release prep
 
 ```bash
-go test ./...
-tools/release/validate-release-version.sh --tag vX.Y.Z
-tools/release/build-cli-release-assets.sh --version vX.Y.Z --out-dir .artifacts/release-preflight
-git add CHANGELOG.md cmd/surf/version.go docs/RELEASE.md docs/RELEASE_RUNBOOK.md docs/RELEASING.md
+cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z
+cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref main --workflow ci.yml
+cargo run --locked -p xtask -- build-release-asset --version vX.Y.Z --target <native-target> --archive-suffix <archive-suffix> --out-dir .artifacts/release-preflight
+git add CHANGELOG.md Cargo.lock crates/surf/Cargo.toml docs/RELEASE.md docs/RELEASE_RUNBOOK.md docs/RELEASING.md
 git commit -m "release: vX.Y.Z"
 ```
 

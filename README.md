@@ -1,6 +1,6 @@
 # surf
 
-`surf` is a Go-first browser runtime for SI.
+`surf` is a Rust browser runtime for SI.
 
 It provides:
 - Dockerized headed Playwright MCP runtime
@@ -15,8 +15,13 @@ It provides:
 
 ## Install
 
+`surf` is intended to run through `si surf`.
+
+For local `surf` development in this repo:
+
 ```bash
-go install github.com/Aureuma/si/tools/si@latest
+cargo build -p surf
+SURF_STANDALONE_UNSAFE=1 cargo run -p surf -- version
 ```
 
 ## Quick start
@@ -60,11 +65,30 @@ Attach to an already-open Chrome/Chromium tab that has CDP enabled:
 si surf session discover
 si surf session attach --id <target-id>
 si surf session act --session <name> --action title
+si surf session act --session <name> --action elements
+si surf session act --session <name> --action scroll --delta-y 480 --steps 4
+si surf session act --session <name> --action type --selector "#q" --text "hello"
+si surf session act --session <name> --action paste --text " world"
 si surf session act --session <name> --action screenshot --out ./shot.png
 si surf session detach --session <name>
 ```
 
-`read_only` mode is default. Write actions (`click`, `type`) require `--mode interactive` during attach.
+`read_only` mode is default. Write actions (`click`, `type`, `paste`, `scroll`) require `--mode interactive` during attach.
+
+Available actions:
+- Read-safe: `title`, `url`, `text`, `elements`, `copy`, `screenshot`, `eval`
+- Interactive only: `click`, `type`, `paste`, `scroll`
+
+Humanized interaction options are available per action call:
+
+```bash
+si surf session act --session <name> --action click --selector "button[type=submit]" \
+  --human=true --min-delay-ms 40 --max-delay-ms 180 --mouse-steps 12
+```
+
+Policy controls (allowlist/blocklist) are enforced from settings:
+- `existing_session.allowed_domains` (default `["*"]`)
+- `existing_session.blocked_domains`
 
 ## Settings
 
@@ -135,12 +159,13 @@ si surf config set --repo /path/to/surf --bin /path/to/surf/bin/surf --build tru
 
 `surf` follows a `si`-style release runbook:
 
-- version source of truth: `cmd/surf/version.go` (`surfVersion`)
-- tag must match version (`tools/release/validate-release-version.sh`)
+- version source of truth: `crates/surf/Cargo.toml` (`version`, surfaced as `SURF_VERSION`)
+- tag must match version (`cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z`)
 - multi-arch archives + checksums:
   - `surf_<version>_linux_amd64.tar.gz`
   - `surf_<version>_linux_arm64.tar.gz`
   - `surf_<version>_darwin_amd64.tar.gz`
   - `surf_<version>_darwin_arm64.tar.gz`
 - workflow: `.github/workflows/cli-release-assets.yml`
+- release helper crate: `cargo run --locked -p xtask -- <command>`
 - browser image publish to GHCR: `ghcr.io/aureuma/surf-browser`

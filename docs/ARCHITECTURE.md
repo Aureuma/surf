@@ -21,9 +21,22 @@
 - internal surf runtime binary
 - SI bridge (`si surf ...`) as the public interface
 - vault-oriented secret plumbing through `si vault`
+5. Existing-session action layer
+- Chrome CDP attach for real user tabs
+- text-first DOM understanding (`elements`, `text`, `copy`)
+- interactive actions over CDP input events (`click`, `type`, `paste`, `scroll`)
+- humanized timing/mouse movement controls
+- domain allowlist/blocklist policy gating
+
+6. Release and operational tooling
+- Cargo workspace rooted at repo root
+- `crates/surf` for the runtime and CLI surface
+- `crates/xtask` for release validation, packaging, checksums, and CI helpers
+- Rust-native browser container entrypoint for Xvfb, VNC, noVNC, and Playwright MCP bootstrap
 
 Design goals:
-- Go-first implementation
+- Rust-first implementation
 - deterministic runtime behavior
 - explicit profile persistence paths
 - clear operator errors when dependencies are missing
+- transparent controls for consent/policy oriented automation

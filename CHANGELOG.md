@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Added persistent Surf settings at `~/.si/surf/settings.toml` with automatic directory/file bootstrap.
 - Added `surf config` subcommands: `show|get|set|path|init`.
-- Added coverage for settings load/write behavior and default resolution in `cmd/surf/settings_test.go`.
+- Added coverage for settings load/write behavior and default resolution in the Surf test suite.
 
 ### Changed
 - Updated tunnel startup defaults to read from Surf settings while still honoring `SURF_*` environment overrides.
