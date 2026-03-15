@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::constants::{
     DEFAULT_CONTAINER, DEFAULT_HOST_BIND, DEFAULT_HOST_MCP_PORT, DEFAULT_HOST_NOVNC_PORT,
     DEFAULT_IMAGE, DEFAULT_MCP_PORT, DEFAULT_MCP_VERSION, DEFAULT_NETWORK, DEFAULT_NOVNC_PORT,
@@ -8,7 +10,7 @@ use crate::constants::{
 use crate::paths::{container_profile_dir, env_trimmed, expand_tilde, sanitize_profile_name};
 use crate::settings::{SurfSettings, load_surf_settings_or_default, surf_state_dir};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BrowserConfig {
     pub image_name: String,
     pub container_name: String,
@@ -26,7 +28,7 @@ pub struct BrowserConfig {
     pub allowed_hosts: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProfileMount {
     pub mount_arg: String,
     pub host_path: Option<String>,
