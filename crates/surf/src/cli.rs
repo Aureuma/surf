@@ -1028,3 +1028,89 @@ fn apply_runtime_overrides(cfg: &mut BrowserConfig, overrides: &RuntimeOverrides
     }
     profile_dir_passed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paths::env_lock;
+    use crate::paths::set_env;
+
+    #[test]
+    fn run_with_no_args_shows_usage_code() {
+        let result = run(&[]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    fn run_help_and_version_flags() {
+        assert_eq!(run(&["help".to_owned()]).expect("help"), 0);
+        assert_eq!(run(&["-h".to_owned()]).expect("short help"), 0);
+        assert_eq!(run(&["--help".to_owned()]).expect("long help"), 0);
+        assert_eq!(run(&["version".to_owned()]).expect("version"), 0);
+        assert_eq!(run(&["-v".to_owned()]).expect("short version"), 0);
+        assert_eq!(run(&["--version".to_owned()]).expect("long version"), 0);
+    }
+
+    #[test]
+    fn run_version_config_paths_do_not_fail() {
+        let lock = env_lock().lock().expect("env mutex");
+        let previous_settings_file = std::env::var_os("SURF_SETTINGS_FILE");
+        set_env("SURF_SETTINGS_FILE", Some("/tmp/surf-config-test-settings.toml"));
+        assert_eq!(run(&["config".to_owned(), "show".to_owned()]).expect("config show"), 0);
+        assert_eq!(
+            run(&["config".to_owned(), "path".to_owned()]).expect("config path"),
+            0
+        );
+        assert_eq!(
+            run(&["session".to_owned(), "discover".to_owned(), "--browser".to_owned(), "firefox".to_owned()])
+                .is_err(),
+            true
+        );
+        set_env(
+            "SURF_SETTINGS_FILE",
+            previous_settings_file
+                .as_ref()
+                .and_then(|value| value.to_str())
+                .map(|value| value.trim()),
+        );
+        drop(lock);
+    }
+
+    #[test]
+    fn apply_runtime_overrides_updates_fields() {
+        let mut cfg = default_config();
+        let overrides = RuntimeOverrides {
+            image: Some("my-image".to_owned()),
+            container_name: Some("my-container".to_owned()),
+            network: Some("bridge".to_owned()),
+            profile: Some("my-profile".to_owned()),
+            profile_dir: Some("/tmp/profile".to_owned()),
+            host_bind: Some("0.0.0.0:8000".to_owned()),
+            host_mcp_port: Some(1),
+            host_novnc_port: Some(2),
+            mcp_port: Some(3),
+            novnc_port: Some(4),
+            vnc_password: Some("pass".to_owned()),
+            mcp_version: Some("1".to_owned()),
+            browser_channel: Some("stable".to_owned()),
+            allowed_hosts: Some("localhost".to_owned()),
+        };
+        let profile_dir_passed = apply_runtime_overrides(&mut cfg, &overrides);
+        assert!(profile_dir_passed);
+        assert_eq!(cfg.image_name, "my-image");
+        assert_eq!(cfg.container_name, "my-container");
+        assert_eq!(cfg.network, "bridge");
+        assert_eq!(cfg.profile_name, "my-profile");
+        assert_eq!(cfg.profile_dir, "/tmp/profile");
+        assert_eq!(cfg.host_bind, "0.0.0.0:8000");
+        assert_eq!(cfg.host_mcp_port, 1);
+        assert_eq!(cfg.host_novnc_port, 2);
+        assert_eq!(cfg.mcp_port, 3);
+        assert_eq!(cfg.novnc_port, 4);
+        assert_eq!(cfg.vnc_password, "pass");
+        assert_eq!(cfg.mcp_version, "1");
+        assert_eq!(cfg.browser_channel, "stable");
+        assert_eq!(cfg.allowed_hosts, "localhost");
+    }
+}

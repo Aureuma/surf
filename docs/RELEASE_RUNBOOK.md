@@ -29,6 +29,8 @@ This repo uses Git tags + GitHub Releases. Follow this order to avoid broken or 
    - `cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z`
 1. Run tests on GitHub Actions only:
    - `cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref main --workflow ci.yml`
+   - Optional full release workflow smoke (requires `gh` auth and publishable tag):
+     - `cargo run --locked -p xtask -- dispatch-ci --repo Aureuma/surf --ref vX.Y.Z --workflow cli-release-assets --workflow-input tag=vX.Y.Z`
 1. Build a local native preflight asset on a matching host (optional packaging sanity check, not test execution):
    - `cargo run --locked -p xtask -- build-release-asset --version vX.Y.Z --target <native-target> --archive-suffix <archive-suffix> --out-dir .artifacts/release-preflight`
 
