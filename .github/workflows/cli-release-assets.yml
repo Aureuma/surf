@@ -43,6 +43,68 @@ jobs:
 
   publish-assets:
     needs: [resolve-tag]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_suffix: linux_amd64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_suffix: linux_arm64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            archive_suffix: darwin_amd64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive_suffix: darwin_arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.tag }}
+
+      - name: Require green CI for release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          success_count="$(
+            gh api \
+              "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed&per_page=50" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
+          )"
+          if [[ "${success_count}" -lt 1 ]]; then
+            echo "No successful CI run found for commit ${sha}. Run CI first and retry release." >&2
+            exit 1
+          fi
+          echo "Found ${success_count} successful CI run(s) for commit ${sha}."
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release tag and CLI version
+        run: |
+          set -euo pipefail
+          cargo run --locked -p xtask -- validate-release-version --tag "${{ needs.resolve-tag.outputs.tag }}"
+
+      - name: Build release archive
+        run: |
+          set -euo pipefail
+          cargo run --locked -p xtask -- build-release-asset --version "${{ needs.resolve-tag.outputs.tag }}" --target "${{ matrix.target }}" --archive-suffix "${{ matrix.archive_suffix }}" --out-dir dist
+          ls -lah dist
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surf-${{ matrix.archive_suffix }}
+          path: dist/*.tar.gz
+
+  assemble-assets:
+    needs: [resolve-tag, publish-assets]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -50,21 +112,20 @@ jobs:
         with:
           ref: ${{ needs.resolve-tag.outputs.tag }}
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download built archives
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: go.mod
-          cache: true
+          pattern: surf-*
+          path: dist
+          merge-multiple: true
 
-      - name: Validate release tag and CLI version
+      - name: Write release checksums
         run: |
           set -euo pipefail
-          tools/release/validate-release-version.sh --tag "${{ needs.resolve-tag.outputs.tag }}"
-
-      - name: Build all release archives and checksums
-        run: |
-          set -euo pipefail
-          tools/release/build-cli-release-assets.sh --version "${{ needs.resolve-tag.outputs.tag }}" --out-dir dist
+          cargo run --locked -p xtask -- write-checksums --dir dist
           ls -lah dist
 
       - name: Upload assets to GitHub Release
@@ -124,7 +185,7 @@ jobs:
 
   verify-release-distribution:
     name: Verify release assets
-    needs: [resolve-tag, publish-assets, publish-ghcr]
+    needs: [resolve-tag, assemble-assets, publish-ghcr]
     runs-on: ubuntu-latest
     steps:
       - name: Verify release distribution state

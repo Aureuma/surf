@@ -7,7 +7,16 @@ on:
     branches: ["main"]
 
 jobs:
-  unit:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  test:
     strategy:
       fail-fast: false
       matrix:
@@ -15,38 +24,5 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: go test ./...
-
-  race:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: go test -race ./cmd/surf
-
-  e2e-chrome:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Install Google Chrome
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends wget gnupg ca-certificates
-          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor | sudo tee /usr/share/keyrings/google-linux-signing.gpg >/dev/null
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux-signing.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends google-chrome-stable
-      - name: Run Chrome E2E
-        env:
-          SURF_E2E_CHROME: "1"
-          CHROME_BIN: /usr/bin/google-chrome
-        run: go test -run TestSessionE2EChromeHeadless -count=1 ./cmd/surf
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --workspace

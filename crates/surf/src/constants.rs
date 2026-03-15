@@ -1,4 +1,4 @@
-pub const SURF_VERSION: &str = "v0.1.1";
+pub const SURF_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 pub const SURF_WRAPPER_ENV_NAME: &str = "SI_SURF_WRAPPED";
 pub const SURF_STANDALONE_BYPASS: &str = "SURF_STANDALONE_UNSAFE";
