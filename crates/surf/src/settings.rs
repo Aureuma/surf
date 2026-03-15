@@ -597,7 +597,7 @@ mod tests {
     #[test]
     #[serial]
     fn load_surf_settings_creates_default_file() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
 
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     #[serial]
     fn set_surf_config_value_updates_supported_keys() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let mut settings = default_surf_settings();
         set_surf_config_value(&mut settings, "tunnel.mode", "token").unwrap();
         set_surf_config_value(&mut settings, "browser.host_mcp_port", "9999").unwrap();
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     #[serial]
     fn default_config_uses_surf_settings() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
 
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     #[serial]
     fn surf_state_dir_uses_settings() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
 
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     #[serial]
     fn tunnel_and_existing_session_round_trip() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
 
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     #[serial]
     fn helper_paths_match_go_behavior() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
         set_env("SURF_STATE_DIR", Some("/tmp/surf-state"));
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     #[serial]
     fn resolve_profile_mount_and_apply_default_match_go_behavior() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(&home.path().to_path_buf());
         set_env("HOME", Some(home.path().to_string_lossy().as_ref()));
