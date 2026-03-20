@@ -1056,16 +1056,26 @@ mod tests {
     fn run_version_config_paths_do_not_fail() {
         let lock = env_lock().lock().expect("env mutex");
         let previous_settings_file = std::env::var_os("SURF_SETTINGS_FILE");
-        set_env("SURF_SETTINGS_FILE", Some("/tmp/surf-config-test-settings.toml"));
-        assert_eq!(run(&["config".to_owned(), "show".to_owned()]).expect("config show"), 0);
+        set_env(
+            "SURF_SETTINGS_FILE",
+            Some("/tmp/surf-config-test-settings.toml"),
+        );
+        assert_eq!(
+            run(&["config".to_owned(), "show".to_owned()]).expect("config show"),
+            0
+        );
         assert_eq!(
             run(&["config".to_owned(), "path".to_owned()]).expect("config path"),
             0
         );
-        assert_eq!(
-            run(&["session".to_owned(), "discover".to_owned(), "--browser".to_owned(), "firefox".to_owned()])
-                .is_err(),
-            true
+        assert!(
+            run(&[
+                "session".to_owned(),
+                "discover".to_owned(),
+                "--browser".to_owned(),
+                "firefox".to_owned()
+            ])
+            .is_err()
         );
         set_env(
             "SURF_SETTINGS_FILE",

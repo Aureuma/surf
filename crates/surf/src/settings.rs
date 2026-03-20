@@ -28,7 +28,7 @@ pub struct SurfSettings {
     pub metadata: SurfSettingsMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct SurfSettingsMetadata {
     pub updated_at: String,
@@ -101,14 +101,6 @@ impl Default for SurfSettings {
             existing_session: SurfExistingSessionSettings::default(),
             tunnel: SurfTunnelSettings::default(),
             metadata: SurfSettingsMetadata::default(),
-        }
-    }
-}
-
-impl Default for SurfSettingsMetadata {
-    fn default() -> Self {
-        Self {
-            updated_at: String::new(),
         }
     }
 }
@@ -556,7 +548,7 @@ fn iso_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use serial_test::serial;
 
@@ -572,7 +564,7 @@ mod tests {
         container_profile_dir, env_lock, host_profile_dir, set_env, surf_settings_path,
     };
 
-    fn reset_env(home: &PathBuf) {
+    fn reset_env(home: &Path) {
         set_env("SURF_SETTINGS_HOME", Some(home.to_string_lossy().as_ref()));
         set_env("SURF_SETTINGS_FILE", None);
         set_env("SURF_SETTINGS_DIR", None);
@@ -599,7 +591,7 @@ mod tests {
     fn load_surf_settings_creates_default_file() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
 
         let settings = load_surf_settings().unwrap();
         assert_eq!(settings.schema_version, 1);
@@ -654,7 +646,7 @@ mod tests {
     fn default_config_uses_surf_settings() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
 
         let mut settings = default_surf_settings();
         settings.browser.image_name = "test/surf:1".to_owned();
@@ -687,7 +679,7 @@ mod tests {
     fn surf_state_dir_uses_settings() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
 
         let mut settings = default_surf_settings();
         settings.paths.state_dir = home.path().join("custom-surf-state").display().to_string();
@@ -701,7 +693,7 @@ mod tests {
     fn tunnel_and_existing_session_round_trip() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
 
         let mut want = default_surf_settings();
         want.tunnel.container_name = "surf-cloudflared-test".to_owned();
@@ -734,7 +726,7 @@ mod tests {
     fn helper_paths_match_go_behavior() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
         set_env("SURF_STATE_DIR", Some("/tmp/surf-state"));
 
         assert_eq!(
@@ -759,7 +751,7 @@ mod tests {
     fn resolve_profile_mount_and_apply_default_match_go_behavior() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
-        reset_env(&home.path().to_path_buf());
+        reset_env(home.path());
         set_env("HOME", Some(home.path().to_string_lossy().as_ref()));
         set_env("SURF_STATE_DIR", Some("/tmp/surf-state"));
 

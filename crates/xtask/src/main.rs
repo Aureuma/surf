@@ -230,10 +230,7 @@ fn dispatch_ci(args: DispatchCiArgs) -> Result<()> {
         Some(reference) => reference,
         None => command_output("git", &["rev-parse", "--abbrev-ref", "HEAD"])?,
     };
-    let sha = command_output(
-        "git",
-        &["rev-parse", &format!("{reference}^{{commit}}")],
-    )?;
+    let sha = command_output("git", &["rev-parse", &format!("{reference}^{{commit}}")])?;
 
     let mut workflow_run_args = vec![
         "workflow".to_owned(),
@@ -253,10 +250,7 @@ fn dispatch_ci(args: DispatchCiArgs) -> Result<()> {
         "Dispatching workflow={} repo={} ref={} sha={}",
         args.workflow, args.repo, reference, sha
     );
-    run_command(
-        "gh",
-        workflow_run_args.as_slice(),
-    )?;
+    run_command("gh", workflow_run_args.as_slice())?;
 
     if args.no_wait {
         println!("Dispatched. Not waiting for completion because --no-wait was set.");
@@ -394,11 +388,8 @@ mod tests {
 
     #[test]
     fn parse_workflow_inputs_accepts_key_value_pairs() {
-        let parsed = parse_workflow_inputs(&[
-            "tag=v0.1.1".to_string(),
-            "release=true".to_string(),
-        ])
-        .expect("workflow input parse");
+        let parsed = parse_workflow_inputs(&["tag=v0.1.1".to_string(), "release=true".to_string()])
+            .expect("workflow input parse");
         assert_eq!(parsed[0], ("tag".to_string(), "v0.1.1".to_string()));
         assert_eq!(parsed[1], ("release".to_string(), "true".to_string()));
     }
@@ -450,15 +441,13 @@ mod tests {
         let first = work_dir.join("surf_0.1.1_darwin_amd64.tar.gz");
         let second = work_dir.join("surf_0.1.1_darwin_arm64.tar.gz");
 
-        std::fs::write(&first, b"darwin amd64")
-            .expect("write first test archive");
-        std::fs::write(&second, b"darwin arm64")
-            .expect("write second test archive");
+        std::fs::write(&first, b"darwin amd64").expect("write first test archive");
+        std::fs::write(&second, b"darwin arm64").expect("write second test archive");
 
         write_checksums(work_dir.as_path()).expect("write checksums");
 
-        let checksums = std::fs::read_to_string(work_dir.join("checksums.txt"))
-            .expect("read checksums");
+        let checksums =
+            std::fs::read_to_string(work_dir.join("checksums.txt")).expect("read checksums");
         let lines: Vec<_> = checksums.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].ends_with("surf_0.1.1_darwin_amd64.tar.gz"));
