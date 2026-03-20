@@ -1159,7 +1159,7 @@ mod tests {
             &session,
             &SessionActionRequest {
                 action: "click".to_owned(),
-                selector: "#go".to_owned(),
+                selector: "#open".to_owned(),
                 ..Default::default()
             },
         )
@@ -1259,9 +1259,9 @@ mod tests {
                             } else if expression.contains("location.href") {
                                 json!({"result": {"type": "string", "value": "https://example.test/page"}})
                             } else if expression.contains("querySelectorAll(selectors)") {
-                                json!({"result": {"type": "object", "value": [{"tag":"button","selector":"button#go","text":"Go"}]}})
+                                json!({"result": {"type": "object", "value": [{"tag":"button","selector":"button#open","text":"Open"}]}})
                             } else if expression.contains("getBoundingClientRect") {
-                                json!({"result": {"type": "object", "value": {"ok": true, "x": 320, "y": 220, "tag":"button","text":"Go"}}})
+                                json!({"result": {"type": "object", "value": {"ok": true, "x": 320, "y": 220, "tag":"button","text":"Open"}}})
                             } else if expression.contains("innerText") {
                                 json!({"result": {"type": "string", "value": "Example Body"}})
                             } else if expression.contains("window.getSelection") {
