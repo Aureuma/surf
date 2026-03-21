@@ -1054,7 +1054,7 @@ mod tests {
 
     #[test]
     fn run_version_config_paths_do_not_fail() {
-        let lock = env_lock().lock().expect("env mutex");
+        let lock = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let previous_settings_file = std::env::var_os("SURF_SETTINGS_FILE");
         set_env(
             "SURF_SETTINGS_FILE",
