@@ -348,6 +348,7 @@ mod tests {
             "SURF_SETTINGS_HOME",
             Some(home.path().to_string_lossy().as_ref()),
         );
+        set_env("SURF_SETTINGS_DIR", None);
         set_env("SURF_SETTINGS_FILE", None);
         set_env("SURF_HOST_PROFILE", None);
 
