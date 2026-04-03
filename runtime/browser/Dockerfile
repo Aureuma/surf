@@ -11,8 +11,6 @@ FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
 USER root
 
-ARG PW_VERSION=1.59.0-alpha-1770338664000
-ARG PW_VERSION_STABLE=1.58.2
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 RUN apt-get update \
@@ -23,9 +21,6 @@ RUN apt-get update \
     x11vnc \
     xterm \
   && rm -rf /var/lib/apt/lists/*
-
-RUN npx -y "playwright@${PW_VERSION_STABLE}" install chromium \
-  && npx -y "playwright@${PW_VERSION}" install chromium
 
 COPY --from=surf-browser-entrypoint-build /workspace/target/release/surf-browser-entrypoint /usr/local/bin/surf-browser-entrypoint
 
