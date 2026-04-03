@@ -6,6 +6,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Aureuma/surf"
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
