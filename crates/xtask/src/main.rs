@@ -111,6 +111,7 @@ fn build_release_asset(
     out_dir: &Path,
 ) -> Result<()> {
     let repo_root = repo_root()?;
+    let target_dir = cargo_target_dir(&repo_root);
     fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
     let version_nov = version.trim().trim_start_matches('v');
     let stem = format!("surf_{}_{}", version_nov, archive_suffix);
@@ -137,18 +138,14 @@ fn build_release_asset(
         bail!("cargo build failed for target {target}");
     }
 
-    let stage_root = repo_root.join("target").join("xtask-stage").join(&stem);
+    let stage_root = target_dir.join("xtask-stage").join(&stem);
     if stage_root.exists() {
         fs::remove_dir_all(&stage_root)
             .with_context(|| format!("remove {}", stage_root.display()))?;
     }
     fs::create_dir_all(&stage_root).with_context(|| format!("create {}", stage_root.display()))?;
 
-    let binary_src = repo_root
-        .join("target")
-        .join(target)
-        .join("release")
-        .join("surf");
+    let binary_src = target_dir.join(target).join("release").join("surf");
     let binary_dst = stage_root.join("surf");
     fs::copy(&binary_src, &binary_dst)
         .with_context(|| format!("copy {} -> {}", binary_src.display(), binary_dst.display()))?;
@@ -219,6 +216,20 @@ fn native_release_targets() -> Result<Vec<(&'static str, &'static str)>> {
         ("macos", "x86_64") => Ok(vec![("x86_64-apple-darwin", "darwin_amd64")]),
         ("macos", "aarch64") => Ok(vec![("aarch64-apple-darwin", "darwin_arm64")]),
         (os, arch) => bail!("unsupported release host {os}/{arch}"),
+    }
+}
+
+fn cargo_target_dir(repo_root: &Path) -> PathBuf {
+    match env::var_os("CARGO_TARGET_DIR") {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        }
+        None => repo_root.join(".artifacts").join("cargo-target"),
     }
 }
 
