@@ -5,7 +5,7 @@ pub const SURF_STANDALONE_BYPASS: &str = "SURF_STANDALONE_UNSAFE";
 
 pub const DEFAULT_IMAGE: &str = "ghcr.io/aureuma/surf-browser:local";
 pub const DEFAULT_CONTAINER: &str = "surf-playwright-mcp-headed";
-pub const DEFAULT_NETWORK: &str = "si";
+pub const DEFAULT_NETWORK: &str = "surf-shared";
 pub const DEFAULT_HOST_BIND: &str = "127.0.0.1";
 pub const DEFAULT_MCP_PORT: i32 = 8931;
 pub const DEFAULT_HOST_MCP_PORT: i32 = 8932;
