@@ -157,10 +157,10 @@ si surf config set --repo /path/to/surf --bin /path/to/surf/bin/surf --build tru
 
 ## Release and versioning
 
-`surf` follows a `si`-style release runbook:
+`surf` follows the single release guide in `docs/RELEASING.md`:
 
 - version source of truth: `crates/surf/Cargo.toml` (`version`, surfaced as `SURF_VERSION`)
-- tag must match version (`cargo run --locked -p xtask -- validate-release-version --tag vX.Y.Z`)
+- tag must match the minor release version (`cargo run --locked -p xtask -- validate-release-version --tag vX.Y.0`)
 - multi-arch archives + checksums:
   - `surf_<version>_linux_amd64.tar.gz`
   - `surf_<version>_linux_arm64.tar.gz`
