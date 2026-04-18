@@ -53,17 +53,8 @@ pub fn build_runtime(
 ) -> Result<BuildResult> {
     must_have_command("docker")?;
 
-    let assets_root = resolve_assets_root(repo)?;
-    let resolved_context = context_dir
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| assets_root.display().to_string());
-    let resolved_dockerfile = dockerfile
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| assets_root.join("Dockerfile").display().to_string());
+    let (resolved_context, resolved_dockerfile) =
+        resolve_build_inputs(repo, context_dir, dockerfile)?;
 
     let status = Command::new("docker")
         .args([
@@ -279,6 +270,30 @@ pub fn wait_for_status(
 
 pub fn resolve_assets_root(repo: Option<&str>) -> Result<PathBuf> {
     let root = resolve_repo_root(repo)?;
+    resolve_assets_root_from_root(&root)
+}
+
+pub fn resolve_build_inputs(
+    repo: Option<&str>,
+    context_dir: Option<&str>,
+    dockerfile: Option<&str>,
+) -> Result<(String, String)> {
+    let root = resolve_repo_root(repo)?;
+    let assets_root = resolve_assets_root_from_root(&root)?;
+    let resolved_context = context_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| root.display().to_string());
+    let resolved_dockerfile = dockerfile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| assets_root.join("Dockerfile").display().to_string());
+    Ok((resolved_context, resolved_dockerfile))
+}
+
+fn resolve_assets_root_from_root(root: &Path) -> Result<PathBuf> {
     let assets = root.join("runtime").join("browser");
     if !assets.join("Dockerfile").exists() {
         bail!("browser assets not found at {}", assets.display());
@@ -498,7 +513,8 @@ pub fn single_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_try_cloudflare_url;
+    use super::{extract_try_cloudflare_url, resolve_build_inputs};
+    use std::fs;
 
     #[test]
     fn extract_cloudflare_url_returns_last_match() {
@@ -518,6 +534,29 @@ mod tests {
         assert_eq!(
             extract_try_cloudflare_url(logs),
             "https://alliance-naval-licenses-childrens.trycloudflare.com"
+        );
+    }
+
+    #[test]
+    fn resolve_build_inputs_defaults_to_repo_root_context() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("runtime/browser")).unwrap();
+        fs::create_dir_all(dir.path().join("crates/surf")).unwrap();
+        fs::write(
+            dir.path().join("runtime/browser/Dockerfile"),
+            "FROM scratch
+",
+        )
+        .unwrap();
+        let (context, dockerfile) =
+            resolve_build_inputs(Some(dir.path().to_str().unwrap()), None, None).unwrap();
+        assert_eq!(context, dir.path().display().to_string());
+        assert_eq!(
+            dockerfile,
+            dir.path()
+                .join("runtime/browser/Dockerfile")
+                .display()
+                .to_string()
         );
     }
 }

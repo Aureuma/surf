@@ -342,8 +342,12 @@ struct TunnelStartArgs {
     mode: Option<String>,
     #[arg(long)]
     token: Option<String>,
-    #[arg(long = "vault-key")]
-    vault_key: Option<String>,
+    #[arg(long = "fort-key", alias = "vault-key")]
+    fort_key: Option<String>,
+    #[arg(long = "fort-repo")]
+    fort_repo: Option<String>,
+    #[arg(long = "fort-env")]
+    fort_env: Option<String>,
     #[arg(long)]
     image: Option<String>,
     #[arg(long)]
@@ -704,7 +708,9 @@ fn handle_tunnel(command: TunnelCommand) -> Result<i32> {
                 args.target_url.as_deref(),
                 args.mode.as_deref(),
                 args.token.as_deref(),
-                args.vault_key.as_deref(),
+                args.fort_key.as_deref(),
+                args.fort_repo.as_deref(),
+                args.fort_env.as_deref(),
                 args.image.as_deref(),
             )?;
             if args.json {

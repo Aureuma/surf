@@ -68,7 +68,10 @@ pub struct SurfTunnelSettings {
     pub target_url: String,
     pub mode: String,
     pub image: String,
-    pub vault_key: String,
+    #[serde(alias = "vault_key")]
+    pub fort_key: String,
+    pub fort_repo: String,
+    pub fort_env: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,7 +146,9 @@ impl Default for SurfTunnelSettings {
             target_url: String::new(),
             mode: "quick".to_owned(),
             image: DEFAULT_CLOUDFLARED_IMAGE.to_owned(),
-            vault_key: String::new(),
+            fort_key: String::new(),
+            fort_repo: String::new(),
+            fort_env: String::new(),
         }
     }
 }
@@ -305,6 +310,15 @@ pub fn apply_surf_settings_defaults(settings: &mut SurfSettings) {
     if settings.tunnel.image.trim().is_empty() {
         settings.tunnel.image = DEFAULT_CLOUDFLARED_IMAGE.to_owned();
     }
+    if settings.tunnel.fort_key.trim().is_empty() {
+        settings.tunnel.fort_key.clear();
+    }
+    if settings.tunnel.fort_repo.trim().is_empty() {
+        settings.tunnel.fort_repo.clear();
+    }
+    if settings.tunnel.fort_env.trim().is_empty() {
+        settings.tunnel.fort_env.clear();
+    }
 }
 
 pub fn load_surf_settings() -> Result<SurfSettings> {
@@ -415,7 +429,11 @@ pub fn set_surf_config_value(settings: &mut SurfSettings, key: &str, value: &str
             settings.tunnel.mode = mode;
         }
         "tunnel.image" => settings.tunnel.image = resolved_value.to_owned(),
-        "tunnel.vault_key" => settings.tunnel.vault_key = resolved_value.to_owned(),
+        "tunnel.fort_key" | "tunnel.vault_key" => {
+            settings.tunnel.fort_key = resolved_value.to_owned()
+        }
+        "tunnel.fort_repo" => settings.tunnel.fort_repo = resolved_value.to_owned(),
+        "tunnel.fort_env" => settings.tunnel.fort_env = resolved_value.to_owned(),
         "existing_session.enabled" => {
             settings.existing_session.enabled = parse_bool(&resolved_key, resolved_value)?;
         }
@@ -701,7 +719,9 @@ mod tests {
             "http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale".to_owned();
         want.tunnel.mode = "token".to_owned();
         want.tunnel.image = "cloudflare/cloudflared:2026.2.0".to_owned();
-        want.tunnel.vault_key = "SURF_CLOUDFLARE_TUNNEL_TOKEN".to_owned();
+        want.tunnel.fort_key = "SURF_CLOUDFLARE_TUNNEL_TOKEN".to_owned();
+        want.tunnel.fort_repo = "surf".to_owned();
+        want.tunnel.fort_env = "dev".to_owned();
         want.existing_session.mode = "interactive".to_owned();
         want.existing_session.chrome_cdp_port = 19922;
         want.existing_session.allowed_domains =
@@ -714,7 +734,9 @@ mod tests {
         assert_eq!(got.tunnel.target_url, want.tunnel.target_url);
         assert_eq!(got.tunnel.mode, want.tunnel.mode);
         assert_eq!(got.tunnel.image, want.tunnel.image);
-        assert_eq!(got.tunnel.vault_key, want.tunnel.vault_key);
+        assert_eq!(got.tunnel.fort_key, want.tunnel.fort_key);
+        assert_eq!(got.tunnel.fort_repo, want.tunnel.fort_repo);
+        assert_eq!(got.tunnel.fort_env, want.tunnel.fort_env);
         assert_eq!(got.existing_session.mode, "interactive");
         assert_eq!(got.existing_session.chrome_cdp_port, 19922);
         assert_eq!(got.existing_session.allowed_domains.len(), 2);

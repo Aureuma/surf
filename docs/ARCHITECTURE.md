@@ -15,12 +15,13 @@
 3. Access layer
 - local reverse proxy mode for MCP path compatibility
 - optional Cloudflare tunnel for internet noVNC observation
-- quick mode and token mode
+- quick mode and Fort-backed token mode
+- shared HTTPS browser viewing typically routed through Viva's dev Cloudflare tunnel
 
 4. Integration layer
 - internal surf runtime binary
 - SI bridge (`si surf ...`) as the public interface
-- vault-oriented secret plumbing through `si vault`
+- Fort-oriented secret plumbing through `si fort`
 5. Existing-session action layer
 - Chrome CDP attach for real user tabs
 - text-first DOM understanding (`elements`, `text`, `copy`)

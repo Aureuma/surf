@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.2] - 2026-04-18
+### Changed
+- Updated Surf tunnel secret resolution and documentation to use `si fort` rather than direct `si vault` access.
+- Clarified that shared dev HTTPS viewing should normally flow through Viva's existing dev tunnel while leaving MCP private by default.
+
+### Fixed
+- Fixed the default browser image build path so `si surf build` uses the repo root as Docker build context.
+
 ## [v0.1.1] - 2026-02-27
 ### Added
 - Added persistent Surf settings at `~/.si/surf/settings.toml` with automatic directory/file bootstrap.

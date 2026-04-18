@@ -26,7 +26,9 @@ pub fn start_tunnel(
     target_url: Option<&str>,
     mode: Option<&str>,
     token: Option<&str>,
-    vault_key: Option<&str>,
+    fort_key: Option<&str>,
+    fort_repo: Option<&str>,
+    fort_env: Option<&str>,
     image: Option<&str>,
 ) -> Result<TunnelStatusPayload> {
     must_have_command("docker")?;
@@ -58,6 +60,23 @@ pub fn start_tunnel(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| tunnel_cfg.image);
+    let fort_key = fort_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| tunnel_cfg.fort_key.trim().to_owned());
+    let fort_repo = fort_repo
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| crate::paths::env_trimmed("SURF_TUNNEL_FORT_REPO"))
+        .unwrap_or_else(|| tunnel_cfg.fort_repo.trim().to_owned());
+    let fort_env = fort_env
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| crate::paths::env_trimmed("SURF_TUNNEL_FORT_ENV"))
+        .unwrap_or_else(|| tunnel_cfg.fort_env.trim().to_owned());
 
     remove_docker_container(name)?;
 
@@ -76,10 +95,10 @@ pub fn start_tunnel(
         run_args.push("--url".to_owned());
         run_args.push(target);
     } else {
-        let token = resolve_token(token, vault_key)?;
+        let token = resolve_token(token, &fort_key, &fort_repo, &fort_env)?;
         if token.trim().is_empty() {
             bail!(
-                "tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or --vault-key)"
+                "tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or Fort-backed --fort-key/--fort-repo/--fort-env)"
             );
         }
         run_args.push("run".to_owned());
@@ -143,33 +162,53 @@ pub fn tunnel_logs(name: &str, tail: i32, follow: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_token(explicit: Option<&str>, vault_key: Option<&str>) -> Result<String> {
+pub fn resolve_token(
+    explicit: Option<&str>,
+    fort_key: &str,
+    fort_repo: &str,
+    fort_env: &str,
+) -> Result<String> {
     if let Some(token) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(token.to_owned());
     }
     if let Some(token) = crate::paths::env_trimmed("SURF_CLOUDFLARE_TUNNEL_TOKEN") {
         return Ok(token);
     }
-    let Some(vault_key) = vault_key.map(str::trim).filter(|value| !value.is_empty()) else {
+    let fort_key = fort_key.trim();
+    if fort_key.is_empty() {
         return Ok(String::new());
-    };
-    vault_get(vault_key)
+    }
+    if fort_repo.trim().is_empty() || fort_env.trim().is_empty() {
+        bail!(
+            "Fort-backed tunnel token requires both repo and env (use --fort-repo/--fort-env or SURF_TUNNEL_FORT_REPO/SURF_TUNNEL_FORT_ENV)"
+        );
+    }
+    fort_get(fort_repo, fort_env, fort_key)
 }
 
-pub fn vault_get(key: &str) -> Result<String> {
+pub fn fort_get(repo: &str, env: &str, key: &str) -> Result<String> {
     crate::runtime::must_have_command("si")?;
     let output = Command::new("si")
-        .args(["vault", "get", key])
+        .args([
+            "fort",
+            "get",
+            "--repo",
+            repo.trim(),
+            "--env",
+            env.trim(),
+            "--key",
+            key.trim(),
+        ])
         .output()
-        .with_context(|| format!("spawn si vault get {key}"))?;
+        .with_context(|| format!("spawn si fort get {key}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let message = if stderr.is_empty() {
-            "si vault get failed".to_owned()
+            "si fort get failed".to_owned()
         } else {
             stderr
         };
-        bail!("si vault get {key} failed: {message}");
+        bail!("si fort get {key} failed: {message}");
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }

@@ -53,6 +53,6 @@ Examples:
   surf session act --session <name> --action title
   surf host start --profile work
   surf tunnel start --mode quick
-  surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
+  surf tunnel start --mode token --fort-key SURF_CLOUDFLARE_TUNNEL_TOKEN --fort-repo surf --fort-env dev
   surf extension install
 "#;

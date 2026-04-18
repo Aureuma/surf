@@ -8,7 +8,7 @@ It provides:
 - noVNC access for visual browser sessions
 - existing browser-session attach and actions (Chrome CDP)
 - optional Cloudflare tunnel exposure for noVNC
-- optional hosted token tunnel mode with secret retrieval from `si vault`
+- optional hosted token tunnel mode with secret retrieval through `si fort`
 - local headed host browser control (Chromium-based) for macOS/Linux
 - MCP compatibility proxy (`/mcp` -> `/sse` GET rewrite)
 - persistent surf settings in `~/.si/surf/settings.toml`
@@ -105,10 +105,14 @@ si surf config path
 si surf config init
 si surf config show --json
 si surf config set --key tunnel.mode --value token
-si surf config set --key tunnel.vault_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
+si surf config set --key tunnel.fort_key --value SURF_CLOUDFLARE_TUNNEL_TOKEN
+si surf config set --key tunnel.fort_repo --value surf
+si surf config set --key tunnel.fort_env --value dev
 ```
 
 ## Public noVNC exposure over Cloudflare
+
+For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel and keep the MCP endpoint private by default. Use Surf's native tunnel commands for local operator workflows or quick temporary exposure.
 
 Quick ephemeral tunnel:
 
@@ -118,16 +122,19 @@ si surf tunnel status
 si surf tunnel logs
 ```
 
-Named/managed token mode (token from env or si vault):
+Named/managed token mode (token from env or `si fort`):
 
 ```bash
-si surf tunnel start --mode token --vault-key SURF_CLOUDFLARE_TUNNEL_TOKEN
+si surf tunnel start --mode token \
+  --fort-key SURF_CLOUDFLARE_TUNNEL_TOKEN \
+  --fort-repo surf \
+  --fort-env dev
 ```
 
 Token resolution order:
 1. `--token`
 2. `SURF_CLOUDFLARE_TUNNEL_TOKEN`
-3. `si vault get <vault-key>` when `--vault-key` is provided
+3. `si fort get --repo <repo> --env <env> --key <fort-key>` when Fort settings are provided
 
 ## Chrome extension scaffold
 
@@ -147,7 +154,7 @@ si surf <...>
 
 `surf` is an internal runtime binary and should be invoked through `si surf`.
 
-`si surf` can hydrate selected `SURF_*` secrets from `si vault` when present.
+`si surf` should be paired with `si fort` for runtime secret access when a Surf flow needs secret material.
 It can also manage wrapper defaults in `~/.si/settings.toml` via:
 
 ```bash
