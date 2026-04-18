@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use rand::Rng;
 use serde::Serialize;
 
 use crate::constants::{
@@ -22,7 +23,9 @@ pub struct BrowserConfig {
     pub host_novnc_port: i32,
     pub mcp_port: i32,
     pub novnc_port: i32,
+    #[serde(skip_serializing)]
     pub vnc_password: String,
+    pub vnc_password_generated: bool,
     pub mcp_version: String,
     pub browser_channel: String,
     pub allowed_hosts: String,
@@ -51,13 +54,10 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
         profile
     };
 
-    let vnc_password = env_trimmed("SURF_VNC_PASSWORD")
-        .unwrap_or_else(|| settings.browser.vnc_password.trim().to_owned());
-    let vnc_password = if vnc_password.trim().is_empty() {
-        "surf".to_owned()
-    } else {
-        vnc_password
-    };
+    let (vnc_password, vnc_password_generated) = resolve_vnc_password(
+        env_trimmed("SURF_VNC_PASSWORD"),
+        settings.browser.vnc_password.trim(),
+    );
 
     let profile_dir = env_or("SURF_PROFILE_DIR", settings.browser.profile_dir.trim());
     let profile_dir = if profile_dir.trim().is_empty() {
@@ -104,6 +104,7 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
             int_or_fallback(settings.browser.novnc_port, DEFAULT_NOVNC_PORT),
         ),
         vnc_password,
+        vnc_password_generated,
         mcp_version: env_or(
             "SURF_MCP_VERSION",
             first_non_empty([settings.browser.mcp_version.trim(), DEFAULT_MCP_VERSION]),
@@ -117,6 +118,59 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
             first_non_empty([settings.browser.allowed_hosts.trim(), "*"]),
         ),
     }
+}
+
+pub fn resolve_vnc_password(
+    explicit_password: Option<String>,
+    configured_password: &str,
+) -> (String, bool) {
+    if let Some(password) = explicit_password
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        return (password, false);
+    }
+    let configured_password = configured_password.trim();
+    if configured_password.is_empty() || is_legacy_placeholder_password(configured_password) {
+        return (generate_secure_vnc_password(24), true);
+    }
+    (configured_password.to_owned(), false)
+}
+
+pub fn generate_secure_vnc_password(len: usize) -> String {
+    let mut rng = rand::rng();
+    (&mut rng)
+        .sample_iter(rand::distr::Alphanumeric)
+        .take(len.max(16))
+        .map(char::from)
+        .collect()
+}
+
+pub fn is_legacy_placeholder_password(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("surf")
+}
+
+pub fn viewer_password_warnings(password: &str, generated: bool) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if generated {
+        warnings.push(
+            "viewer password was generated at startup because Surf had no explicit VNC password configured"
+                .to_owned(),
+        );
+        return warnings;
+    }
+    if is_legacy_placeholder_password(password) {
+        warnings.push(
+            "viewer password is using the legacy insecure `surf` value; set a strong password before public sharing"
+                .to_owned(),
+        );
+    } else if password.chars().count() < 12 {
+        warnings.push(
+            "viewer password is shorter than 12 characters; use a longer secret for shared/public sessions"
+                .to_owned(),
+        );
+    }
+    warnings
 }
 
 pub fn host_connect(bind: &str) -> String {
@@ -205,4 +259,48 @@ fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
         .find(|value| !value.is_empty())
         .unwrap_or_default()
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generate_secure_vnc_password, is_legacy_placeholder_password, resolve_vnc_password,
+        viewer_password_warnings,
+    };
+
+    #[test]
+    fn resolve_vnc_password_generates_for_empty_or_legacy_placeholder() {
+        let (empty_password, empty_generated) = resolve_vnc_password(None, "");
+        assert!(empty_generated);
+        assert!(empty_password.len() >= 16);
+        assert_ne!(empty_password, "surf");
+
+        let (legacy_password, legacy_generated) = resolve_vnc_password(None, "surf");
+        assert!(legacy_generated);
+        assert!(legacy_password.len() >= 16);
+        assert_ne!(legacy_password, "surf");
+    }
+
+    #[test]
+    fn resolve_vnc_password_keeps_explicit_passwords() {
+        let (configured_password, configured_generated) =
+            resolve_vnc_password(None, "topsecretvalue");
+        assert!(!configured_generated);
+        assert_eq!(configured_password, "topsecretvalue");
+
+        let (explicit_password, explicit_generated) =
+            resolve_vnc_password(Some("surf".to_owned()), "ignored");
+        assert!(!explicit_generated);
+        assert_eq!(explicit_password, "surf");
+    }
+
+    #[test]
+    fn viewer_password_warnings_flag_weak_or_generated_passwords() {
+        assert_eq!(viewer_password_warnings("ignored", true).len(), 1);
+        assert_eq!(viewer_password_warnings("surf", false).len(), 1);
+        assert_eq!(viewer_password_warnings("shortpass", false).len(), 1);
+        assert!(viewer_password_warnings("avery-strong-password", false).is_empty());
+        assert!(is_legacy_placeholder_password("surf"));
+        assert!(generate_secure_vnc_password(24).len() >= 16);
+    }
 }

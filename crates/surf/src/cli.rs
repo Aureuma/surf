@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use clap::{ArgAction, Args, Parser, Subcommand};
 use serde::Serialize;
 
-use crate::browser::{BrowserConfig, default_config};
+use crate::browser::{BrowserConfig, default_config, resolve_vnc_password};
 use crate::constants::{SURF_VERSION, USAGE_TEXT};
 use crate::extension::{extension_doctor, extension_path, install_extension};
 use crate::host::{
@@ -550,6 +550,9 @@ fn handle_start(args: StartArgs) -> Result<i32> {
             "mcp_url": result.mcp_url,
             "novnc_url": result.novnc_url,
             "container_name": result.container_name,
+            "viewer_password": result.viewer_password,
+            "viewer_password_generated": result.viewer_password_generated,
+            "warnings": result.warnings,
         }))?;
     } else {
         println!("surf start");
@@ -563,6 +566,12 @@ fn handle_start(args: StartArgs) -> Result<i32> {
         );
         println!("  mcp_url={}", result.mcp_url);
         println!("  novnc_url={}", result.novnc_url);
+        if let Some(password) = result.viewer_password.as_ref() {
+            println!("  viewer_password={}", password);
+        }
+        for warning in &result.warnings {
+            println!("  warning={}", warning);
+        }
     }
     Ok(0)
 }
@@ -1021,7 +1030,15 @@ fn apply_runtime_overrides(cfg: &mut BrowserConfig, overrides: &RuntimeOverrides
         cfg.novnc_port = value;
     }
     if let Some(value) = overrides.vnc_password.as_ref() {
-        cfg.vnc_password = value.trim().to_owned();
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            let (password, generated) = resolve_vnc_password(None, "");
+            cfg.vnc_password = password;
+            cfg.vnc_password_generated = generated;
+        } else {
+            cfg.vnc_password = trimmed.to_owned();
+            cfg.vnc_password_generated = false;
+        }
     }
     if let Some(value) = overrides.mcp_version.as_ref() {
         cfg.mcp_version = value.trim().to_owned();

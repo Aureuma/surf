@@ -131,7 +131,7 @@ impl Default for SurfBrowserSettings {
             host_novnc_port: DEFAULT_HOST_NOVNC_PORT,
             mcp_port: DEFAULT_MCP_PORT,
             novnc_port: DEFAULT_NOVNC_PORT,
-            vnc_password: "surf".to_owned(),
+            vnc_password: String::new(),
             mcp_version: DEFAULT_MCP_VERSION.to_owned(),
             browser_channel: "chromium".to_owned(),
             allowed_hosts: "*".to_owned(),
@@ -222,9 +222,6 @@ pub fn apply_surf_settings_defaults(settings: &mut SurfSettings) {
     }
     if settings.browser.novnc_port <= 0 {
         settings.browser.novnc_port = DEFAULT_NOVNC_PORT;
-    }
-    if settings.browser.vnc_password.trim().is_empty() {
-        settings.browser.vnc_password = "surf".to_owned();
     }
     if settings.browser.mcp_version.trim().is_empty() {
         settings.browser.mcp_version = DEFAULT_MCP_VERSION.to_owned();

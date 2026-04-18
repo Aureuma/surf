@@ -14,9 +14,9 @@
 
 3. Access layer
 - local reverse proxy mode for MCP path compatibility
-- optional Cloudflare tunnel for internet noVNC observation
+- optional Cloudflare tunnel for internet noVNC observation with generated operator-visible viewer passwords when none are configured
 - quick mode and Fort-backed token mode
-- shared HTTPS browser viewing typically routed through Viva's dev Cloudflare tunnel
+- shared HTTPS browser viewing typically routed through Viva's dev Cloudflare tunnel and ideally gated by Cloudflare Access
 
 4. Integration layer
 - internal surf runtime binary

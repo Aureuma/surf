@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::browser::{
     BrowserConfig, apply_container_profile_default, mcp_url, novnc_url, resolve_profile_mount,
+    viewer_password_warnings,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,6 +44,9 @@ pub struct StartResult {
     pub mcp_url: String,
     pub novnc_url: String,
     pub container_name: String,
+    pub viewer_password: Option<String>,
+    pub viewer_password_generated: bool,
+    pub warnings: Vec<String>,
 }
 
 pub fn build_runtime(
@@ -141,10 +145,15 @@ pub fn start_runtime(
     run_docker_output(&run_args).context("docker run failed")?;
 
     let status = wait_for_status(&cfg, 15, Duration::from_secs(1))?;
+    let warnings = viewer_password_warnings(&cfg.vnc_password, cfg.vnc_password_generated);
+    let viewer_password = cfg.vnc_password_generated.then(|| cfg.vnc_password.clone());
     Ok(StartResult {
         mcp_url: mcp_url(&cfg),
         novnc_url: novnc_url(&cfg),
         container_name: cfg.container_name.clone(),
+        viewer_password,
+        viewer_password_generated: cfg.vnc_password_generated,
+        warnings,
         status,
         config: cfg,
     })

@@ -5,7 +5,7 @@
 It provides:
 - Dockerized headed Playwright MCP runtime
 - persisted browser profiles (container + host)
-- noVNC access for visual browser sessions
+- noVNC access for visual browser sessions with generated per-start passwords when none are configured
 - existing browser-session attach and actions (Chrome CDP)
 - optional Cloudflare tunnel exposure for noVNC
 - optional hosted token tunnel mode with secret retrieval through `si fort`
@@ -112,7 +112,7 @@ si surf config set --key tunnel.fort_env --value dev
 
 ## Public noVNC exposure over Cloudflare
 
-For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel and keep the MCP endpoint private by default. Use Surf's native tunnel commands for local operator workflows or quick temporary exposure.
+For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel and keep the MCP endpoint private by default. Use Surf's native tunnel commands for local operator workflows or quick temporary exposure. Shared noVNC sessions should also sit behind Cloudflare Access or an equivalent gate whenever possible.
 
 Quick ephemeral tunnel:
 
@@ -135,6 +135,8 @@ Token resolution order:
 1. `--token`
 2. `SURF_CLOUDFLARE_TUNNEL_TOKEN`
 3. `si fort get --repo <repo> --env <env> --key <fort-key>` when Fort settings are provided
+
+When `browser.vnc_password` is empty or still set to the old `surf` placeholder, Surf now generates a strong per-start viewer password and prints it from `surf start`. Set an explicit password only when you need a stable shared secret.
 
 ## Chrome extension scaffold
 

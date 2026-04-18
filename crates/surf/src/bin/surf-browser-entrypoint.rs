@@ -6,13 +6,14 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use surf::browser::generate_secure_vnc_password;
 
 const DEFAULT_DISPLAY_NUM: &str = "99";
 const DEFAULT_XVFB_WHD: &str = "1920x1080x24";
 const DEFAULT_MCP_PORT: &str = "8931";
 const DEFAULT_VNC_PORT: &str = "5900";
 const DEFAULT_NOVNC_PORT: &str = "6080";
-const DEFAULT_VNC_PASSWORD: &str = "surf";
+const DEFAULT_VNC_PASSWORD: &str = "";
 const DEFAULT_MCP_VERSION: &str = "0.0.64";
 const DEFAULT_PROFILE_DIR: &str = "/home/pwuser/.playwright-mcp-profile";
 const DEFAULT_ALLOWED_HOSTS: &str = "*";
@@ -176,13 +177,23 @@ struct EntryPointConfig {
 
 impl EntryPointConfig {
     fn from_env() -> Self {
+        let raw_vnc_password = env_or("VNC_PASSWORD", DEFAULT_VNC_PASSWORD);
+        let vnc_password = if raw_vnc_password.trim().is_empty() {
+            let generated = generate_secure_vnc_password(24);
+            eprintln!(
+                "surf-browser-entrypoint: generated a random VNC password because none was provided"
+            );
+            generated
+        } else {
+            raw_vnc_password
+        };
         Self {
             display_num: env_or("DISPLAY_NUM", DEFAULT_DISPLAY_NUM),
             xvfb_whd: env_or("XVFB_WHD", DEFAULT_XVFB_WHD),
             mcp_port: env_or("MCP_PORT", DEFAULT_MCP_PORT),
             vnc_port: env_or("VNC_PORT", DEFAULT_VNC_PORT),
             novnc_port: env_or("NOVNC_PORT", DEFAULT_NOVNC_PORT),
-            vnc_password: env_or("VNC_PASSWORD", DEFAULT_VNC_PASSWORD),
+            vnc_password,
             mcp_version: env_or("MCP_VERSION", DEFAULT_MCP_VERSION),
             profile_dir: PathBuf::from(env_or("PROFILE_DIR", DEFAULT_PROFILE_DIR)),
             allowed_hosts: env_or("ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS),
