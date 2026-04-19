@@ -2,6 +2,10 @@
 
 - Follow the shared workspace rules in `/home/shawn/Development/AGENTS.md`.
 
+## Secrets And Credentials
+
+- `si fort` is the canonical interface for secret and credential management for this repo. Use raw `si vault` only for explicit Fort/SI Vault maintenance or required local encryption work under the shared workspace rules.
+
 ## Version Source Of Truth
 
 - Keep one repo-wide version for `surf`.
