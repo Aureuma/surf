@@ -112,7 +112,7 @@ si surf config set --key tunnel.fort_env --value dev
 
 ## Public noVNC exposure over Cloudflare
 
-For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel and keep the MCP endpoint private by default. Use Surf's native tunnel commands for local operator workflows or quick temporary exposure. Shared noVNC sessions should also sit behind Cloudflare Access or an equivalent gate whenever possible.
+For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel at `https://surf-browser.aureuma.ai`. When remote MCP access is needed, expose it at `https://surf-browser-mcp.aureuma.ai/mcp`. Shared Surf endpoints should also sit behind Cloudflare Access or an equivalent gate whenever possible.
 
 Quick ephemeral tunnel:
 

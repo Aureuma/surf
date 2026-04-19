@@ -2,13 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.4] - 2026-04-18
+### Changed
+- Updated Surf's Viva-managed public hostnames to `surf-browser.aureuma.ai` for noVNC and `surf-browser-mcp.aureuma.ai` for MCP.
+
+### Verified
+- Confirmed that the public `surf-browser.aureuma.ai` viewer serves `vnc.html`, and `surf-browser-mcp.aureuma.ai/mcp` reaches the Surf MCP service through the Viva dev tunnel.
+
 ## [v0.1.3] - 2026-04-18
 ### Changed
 - Replaced Surf's fixed default noVNC password with generated per-start viewer passwords unless an explicit password is configured.
 - Surf start output now surfaces generated viewer passwords and warns when an explicit password is weak or still using the legacy `surf` placeholder.
 
 ### Verified
-- Confirmed that the public `surf.shawnazdam.com` viewer serves `vnc.html` and accepts websocket connections on `/websockify` through the Viva dev tunnel.
+- Confirmed that the public `surf-browser.aureuma.ai` viewer serves `vnc.html` and accepts websocket connections on `/websockify` through the Viva dev tunnel.
 
 ## [v0.1.2] - 2026-04-18
 ### Changed
