@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.7] - 2026-04-19
+### Fixed
+- Regenerated Surf's workspace lockfile so `cargo build --locked` succeeds again for the browser runtime Docker build.
+
+### Verified
+- Confirmed the locked workspace check passes after the lockfile refresh.
+
 ## [v0.1.5] - 2026-04-19
 ### Fixed
 - Forced the Surf Fluxbox runtime to use a single workspace by default so the noVNC viewer no longer starts with four desktops.
