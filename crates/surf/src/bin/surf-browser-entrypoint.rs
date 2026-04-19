@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -18,6 +19,7 @@ const DEFAULT_MCP_VERSION: &str = "0.0.64";
 const DEFAULT_PROFILE_DIR: &str = "/home/pwuser/.playwright-mcp-profile";
 const DEFAULT_ALLOWED_HOSTS: &str = "*";
 const DEFAULT_BROWSER_CHANNEL: &str = "chromium";
+const DEFAULT_FLUXBOX_WORKSPACES: &str = "1";
 
 fn main() {
     if let Err(error) = run() {
@@ -33,6 +35,7 @@ fn run() -> Result<()> {
     fs::create_dir_all("/home/pwuser/.vnc").context("create VNC directory")?;
     fs::create_dir_all(&config.profile_dir)
         .with_context(|| format!("create {}", config.profile_dir.display()))?;
+    ensure_fluxbox_single_workspace()?;
 
     let status = Command::new("x11vnc")
         .args([
@@ -162,6 +165,46 @@ fn wait_for_path(path: &Path, attempts: usize, interval: Duration) -> Result<()>
     bail!("timed out waiting for {}", path.display());
 }
 
+fn ensure_fluxbox_single_workspace() -> Result<()> {
+    let fluxbox_dir = Path::new("/home/pwuser/.fluxbox");
+    fs::create_dir_all(fluxbox_dir).context("create Fluxbox directory")?;
+    let init_path = fluxbox_dir.join("init");
+    let existing = fs::read_to_string(&init_path).unwrap_or_default();
+    let normalized = normalize_fluxbox_init(&existing);
+    if normalized == existing {
+        return Ok(());
+    }
+    let mut file =
+        File::create(&init_path).with_context(|| format!("create {}", init_path.display()))?;
+    file.write_all(normalized.as_bytes())
+        .with_context(|| format!("write {}", init_path.display()))?;
+    Ok(())
+}
+
+fn normalize_fluxbox_init(existing: &str) -> String {
+    let workspace_key = "session.screen0.workspaces:";
+    let mut lines = Vec::new();
+    let mut saw_workspace_key = false;
+    for line in existing.lines() {
+        if line.trim_start().starts_with(workspace_key) {
+            if !saw_workspace_key {
+                lines.push(format!("{workspace_key}	{DEFAULT_FLUXBOX_WORKSPACES}"));
+                saw_workspace_key = true;
+            }
+            continue;
+        }
+        lines.push(line.to_owned());
+    }
+    if !saw_workspace_key {
+        lines.push(format!("{workspace_key}	{DEFAULT_FLUXBOX_WORKSPACES}"));
+    }
+    let mut normalized = lines.join("\n");
+    if !normalized.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
+
 struct EntryPointConfig {
     display_num: String,
     xvfb_whd: String,
@@ -208,4 +251,39 @@ fn env_or(name: &str, default_value: &str) -> String {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_fluxbox_init;
+
+    #[test]
+    fn normalize_fluxbox_init_adds_single_workspace_when_missing() {
+        let got = normalize_fluxbox_init(
+            "session.menuFile:	~/.fluxbox/menu
+session.styleFile:	default
+",
+        );
+        assert!(got.contains(
+            "session.screen0.workspaces:	1
+"
+        ));
+    }
+
+    #[test]
+    fn normalize_fluxbox_init_replaces_existing_workspace_count() {
+        let got = normalize_fluxbox_init(
+            "session.menuFile:	~/.fluxbox/menu
+session.screen0.workspaces:	4
+",
+        );
+        assert!(got.contains(
+            "session.screen0.workspaces:	1
+"
+        ));
+        assert!(!got.contains(
+            "session.screen0.workspaces:	4
+"
+        ));
+    }
 }

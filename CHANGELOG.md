@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.5] - 2026-04-19
+### Fixed
+- Forced the Surf Fluxbox runtime to use a single workspace by default so the noVNC viewer no longer starts with four desktops.
+
 ## [v0.1.4] - 2026-04-18
 ### Changed
 - Updated Surf's Viva-managed public hostnames to `surf-browser.aureuma.ai` for noVNC and `surf-browser-mcp.aureuma.ai` for MCP.
