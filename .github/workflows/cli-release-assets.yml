@@ -123,6 +123,7 @@ jobs:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Require green CI for release commit
+        if: ${{ needs.resolve-tag.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
