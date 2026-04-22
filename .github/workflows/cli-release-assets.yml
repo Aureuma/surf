@@ -6,9 +6,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build/upload (for example v0.1.0)
+        description: Release version tag to validate or publish (for example v0.2.2)
         required: true
         type: string
+      ref:
+        description: Git ref to checkout for workflow_dispatch runs; defaults to the current ref unless publish is enabled
+        required: false
+        type: string
+      publish:
+        description: Publish assets to the GitHub Release and GHCR instead of running a validation-only build
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: surf-cli-release-assets-${{ github.event.release.tag_name || github.event.inputs.tag || github.run_id }}
@@ -25,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      publish: ${{ steps.resolve.outputs.publish }}
     steps:
       - name: Resolve release tag
         id: resolve
@@ -32,6 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ github.event.release.tag_name }}"
+          publish="true"
           if [[ -z "${tag}" ]]; then
             tag="${{ github.event.inputs.tag }}"
           fi
@@ -39,7 +51,21 @@ jobs:
             echo "No release tag provided." >&2
             exit 1
           fi
+          checkout_ref="${tag}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            publish="${{ github.event.inputs.publish }}"
+            checkout_ref="${{ github.event.inputs.ref }}"
+            if [[ -z "${checkout_ref}" ]]; then
+              if [[ "${publish}" == "true" ]]; then
+                checkout_ref="${tag}"
+              else
+                checkout_ref="${{ github.ref_name }}"
+              fi
+            fi
+          fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "checkout_ref=${checkout_ref}" >> "${GITHUB_OUTPUT}"
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
 
   ensure-release:
     needs: [resolve-tag]
@@ -52,6 +78,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.resolve-tag.outputs.tag }}"
+          if [[ "${{ needs.resolve-tag.outputs.publish }}" != "true" ]]; then
+            echo "Validation-only workflow_dispatch run; no release required."
+            exit 0
+          fi
           if gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release ${tag} already exists."
             exit 0
@@ -90,7 +120,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
+          ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Require green CI for release commit
         env:
@@ -136,7 +166,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
+          ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -155,6 +185,7 @@ jobs:
           ls -lah dist
 
       - name: Upload assets to GitHub Release
+        if: ${{ needs.resolve-tag.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -163,7 +194,15 @@ jobs:
           gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null
           gh release upload "${tag}" dist/*.tar.gz dist/checksums.txt --repo "${{ github.repository }}" --clobber
 
+      - name: Upload checksum artifact
+        if: ${{ needs.resolve-tag.outputs.publish != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: surf-checksums
+          path: dist/checksums.txt
+
       - name: Attest release artifacts
+        if: ${{ needs.resolve-tag.outputs.publish == 'true' }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
@@ -172,12 +211,13 @@ jobs:
 
   publish-ghcr:
     needs: [resolve-tag, ensure-release]
+    if: ${{ needs.resolve-tag.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
+          ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -213,6 +253,7 @@ jobs:
   verify-release-distribution:
     name: Verify release assets
     needs: [resolve-tag, ensure-release, assemble-assets, publish-ghcr]
+    if: ${{ needs.resolve-tag.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Verify release distribution state
