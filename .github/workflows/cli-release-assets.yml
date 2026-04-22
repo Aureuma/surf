@@ -41,8 +41,34 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-  publish-assets:
+  ensure-release:
     needs: [resolve-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure release exists for tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.resolve-tag.outputs.tag }}"
+          if gh release view "${tag}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists."
+            exit 0
+          fi
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "Release ${tag} is missing for event ${{ github.event_name }}." >&2
+            exit 1
+          fi
+          gh release create "${tag}" \
+            --repo "${{ github.repository }}" \
+            --verify-tag \
+            --draft \
+            --title "${tag}" \
+            --notes "Draft release created by workflow_dispatch for CLI asset publication."
+
+  publish-assets:
+    needs: [resolve-tag, ensure-release]
     strategy:
       fail-fast: false
       matrix:
@@ -104,7 +130,7 @@ jobs:
           path: dist/*.tar.gz
 
   assemble-assets:
-    needs: [resolve-tag, publish-assets]
+    needs: [resolve-tag, ensure-release, publish-assets]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -145,7 +171,7 @@ jobs:
             dist/checksums.txt
 
   publish-ghcr:
-    needs: [resolve-tag]
+    needs: [resolve-tag, ensure-release]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -170,6 +196,7 @@ jobs:
           images: ghcr.io/aureuma/surf-browser
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.resolve-tag.outputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=ref,event=tag
             type=sha
 
@@ -185,7 +212,7 @@ jobs:
 
   verify-release-distribution:
     name: Verify release assets
-    needs: [resolve-tag, assemble-assets, publish-ghcr]
+    needs: [resolve-tag, ensure-release, assemble-assets, publish-ghcr]
     runs-on: ubuntu-latest
     steps:
       - name: Verify release distribution state
