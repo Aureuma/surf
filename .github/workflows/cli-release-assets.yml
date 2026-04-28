@@ -141,7 +141,12 @@ jobs:
           echo "Found ${success_count} successful CI run(s) for commit ${sha}."
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> .artifacts/cargo-target
 
       - name: Validate release tag and CLI version
         run: |
@@ -170,7 +175,12 @@ jobs:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> .artifacts/cargo-target
 
       - name: Download built archives
         uses: actions/download-artifact@v4
