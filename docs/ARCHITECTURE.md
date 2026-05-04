@@ -17,6 +17,7 @@
 - optional Cloudflare tunnel for internet noVNC observation with generated operator-visible viewer passwords when none are configured
 - quick mode and Fort-backed token mode
 - shared HTTPS browser viewing typically routed through Viva's dev Cloudflare tunnel as `surf-browser.aureuma.ai`, with optional MCP at `surf-browser-mcp.aureuma.ai`, and ideally gated by Cloudflare Access
+- hardened default noVNC viewer at `/surf.html` that auto-connects and refocuses the remote screen for reliable keyboard input, while keeping stock noVNC at `/vnc.html`
 
 4. Integration layer
 - internal surf runtime binary

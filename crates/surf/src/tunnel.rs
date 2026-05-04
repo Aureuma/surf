@@ -2,6 +2,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use std::path::Path;
 
 use crate::browser::{BrowserConfig, novnc_url};
 use crate::runtime::{
@@ -27,8 +28,7 @@ pub fn start_tunnel(
     mode: Option<&str>,
     token: Option<&str>,
     fort_key: Option<&str>,
-    fort_repo: Option<&str>,
-    fort_env: Option<&str>,
+    fort_env_file: Option<&str>,
     image: Option<&str>,
 ) -> Result<TunnelStatusPayload> {
     must_have_command("docker")?;
@@ -65,18 +65,12 @@ pub fn start_tunnel(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| tunnel_cfg.fort_key.trim().to_owned());
-    let fort_repo = fort_repo
+    let fort_env_file = fort_env_file
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| crate::paths::env_trimmed("SURF_TUNNEL_FORT_REPO"))
-        .unwrap_or_else(|| tunnel_cfg.fort_repo.trim().to_owned());
-    let fort_env = fort_env
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| crate::paths::env_trimmed("SURF_TUNNEL_FORT_ENV"))
-        .unwrap_or_else(|| tunnel_cfg.fort_env.trim().to_owned());
+        .or_else(|| crate::paths::env_trimmed("SURF_TUNNEL_FORT_ENV_FILE"))
+        .unwrap_or_else(|| tunnel_cfg.fort_env_file.trim().to_owned());
 
     remove_docker_container(name)?;
 
@@ -95,10 +89,10 @@ pub fn start_tunnel(
         run_args.push("--url".to_owned());
         run_args.push(target);
     } else {
-        let token = resolve_token(token, &fort_key, &fort_repo, &fort_env)?;
+        let token = resolve_token(token, &fort_key, &fort_env_file)?;
         if token.trim().is_empty() {
             bail!(
-                "tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or Fort-backed --fort-key/--fort-repo/--fort-env)"
+                "tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or Fort-backed --fort-key/--fort-env-file)"
             );
         }
         run_args.push("run".to_owned());
@@ -165,8 +159,7 @@ pub fn tunnel_logs(name: &str, tail: i32, follow: bool) -> Result<()> {
 pub fn resolve_token(
     explicit: Option<&str>,
     fort_key: &str,
-    fort_repo: &str,
-    fort_env: &str,
+    fort_env_file: &str,
 ) -> Result<String> {
     if let Some(token) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(token.to_owned());
@@ -178,12 +171,45 @@ pub fn resolve_token(
     if fort_key.is_empty() {
         return Ok(String::new());
     }
-    if fort_repo.trim().is_empty() || fort_env.trim().is_empty() {
+    let (fort_repo, fort_env) = infer_repo_env_from_path(fort_env_file)?;
+    fort_get(fort_repo, fort_env, fort_key)
+}
+
+fn infer_repo_env_from_path(path: &str) -> Result<(&str, &str)> {
+    let path = path.trim();
+    if path.is_empty() {
         bail!(
-            "Fort-backed tunnel token requires both repo and env (use --fort-repo/--fort-env or SURF_TUNNEL_FORT_REPO/SURF_TUNNEL_FORT_ENV)"
+            "Fort-backed tunnel token requires SURF_TUNNEL_FORT_ENV_FILE or --fort-env-file pointing at /path/to/<repo>/.env.dev or .env.prod"
         );
     }
-    fort_get(fort_repo, fort_env, fort_key)
+    let path = Path::new(path);
+    let env = match path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        ".env.dev" | ".env.development" => "dev",
+        ".env.prod" | ".env.production" => "prod",
+        _ => {
+            bail!(
+                "Fort-backed tunnel token env file must point at /path/to/<repo>/.env.dev or .env.prod"
+            )
+        }
+    };
+    let repo = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .trim();
+    if repo.is_empty() {
+        bail!(
+            "Fort-backed tunnel token env file must point at /path/to/<repo>/.env.dev or .env.prod"
+        );
+    }
+    Ok((repo, env))
 }
 
 pub fn fort_get(repo: &str, env: &str, key: &str) -> Result<String> {

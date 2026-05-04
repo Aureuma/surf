@@ -192,7 +192,7 @@ pub fn mcp_url(cfg: &BrowserConfig) -> String {
 
 pub fn novnc_url(cfg: &BrowserConfig) -> String {
     format!(
-        "http://{}:{}/vnc.html?autoconnect=1&resize=scale",
+        "http://{}:{}/surf.html",
         host_connect(&cfg.host_bind),
         cfg.host_novnc_port
     )
@@ -264,8 +264,8 @@ fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_secure_vnc_password, is_legacy_placeholder_password, resolve_vnc_password,
-        viewer_password_warnings,
+        BrowserConfig, generate_secure_vnc_password, is_legacy_placeholder_password, novnc_url,
+        resolve_vnc_password, viewer_password_warnings,
     };
 
     #[test]
@@ -302,5 +302,28 @@ mod tests {
         assert!(viewer_password_warnings("avery-strong-password", false).is_empty());
         assert!(is_legacy_placeholder_password("surf"));
         assert!(generate_secure_vnc_password(24).len() >= 16);
+    }
+
+    #[test]
+    fn novnc_url_uses_hardened_surf_viewer() {
+        let cfg = BrowserConfig {
+            image_name: "image".to_owned(),
+            container_name: "container".to_owned(),
+            network: "network".to_owned(),
+            profile_name: "profile".to_owned(),
+            profile_dir: "volume:profile".to_owned(),
+            host_bind: "0.0.0.0".to_owned(),
+            host_mcp_port: 8933,
+            host_novnc_port: 6081,
+            mcp_port: 8931,
+            novnc_port: 6080,
+            vnc_password: "password".to_owned(),
+            vnc_password_generated: false,
+            mcp_version: "0.0.64".to_owned(),
+            browser_channel: "chromium".to_owned(),
+            allowed_hosts: "*".to_owned(),
+        };
+
+        assert_eq!(novnc_url(&cfg), "http://127.0.0.1:6081/surf.html");
     }
 }
