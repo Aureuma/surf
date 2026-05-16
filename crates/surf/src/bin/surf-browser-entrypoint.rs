@@ -295,7 +295,7 @@ fn run() -> Result<()> {
         ])
         .env("DISPLAY", &display)
         .exec();
-    bail!("exec npx failed: {error}");
+    bail!("exec corepack pnpm dlx failed: {error}");
 }
 
 fn spawn_logged_process<I, S>(
