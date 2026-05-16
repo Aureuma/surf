@@ -278,7 +278,7 @@ fn run() -> Result<()> {
         &[],
     )?;
 
-    let error = Command::new("npx")
+    let error = Command::new("corepack")
         .args([
             "-y",
             &format!("@playwright/mcp@{}", config.mcp_version),
