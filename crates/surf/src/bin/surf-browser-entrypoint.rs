@@ -280,6 +280,8 @@ fn run() -> Result<()> {
 
     let error = Command::new("corepack")
         .args([
+            "pnpm",
+            "dlx",
             "-y",
             &format!("@playwright/mcp@{}", config.mcp_version),
             "--host",
