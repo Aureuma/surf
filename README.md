@@ -161,15 +161,15 @@ si surf <...>
 It can also manage wrapper defaults in `~/.si/settings.toml` via:
 
 ```bash
-si surf config show --json
-si surf config set --repo /path/to/surf --bin /path/to/surf/bin/surf --build true
+si surf wrapper config show --json
+si surf wrapper config set --repo /path/to/surf --bin /path/to/surf/bin/surf --build true
 ```
 
 ## Release and versioning
 
 `surf` follows the single release guide in `docs/RELEASING.md`:
 
-- version source of truth: `crates/surf/Cargo.toml` (`version`, surfaced as `SURF_VERSION`)
+- version source of truth: root `Cargo.toml` `[workspace.package].version` (surfaced as `SURF_VERSION`)
 - tag must match the minor release version (`cargo run --locked -p xtask -- validate-release-version --tag vX.Y.0`)
 - multi-arch archives + checksums:
   - `surf_<version>_linux_amd64.tar.gz`
