@@ -29,6 +29,9 @@ permissions:
   id-token: write
   packages: write
 
+env:
+  CARGO_BUILD_JOBS: 2
+
 jobs:
   resolve-tag:
     runs-on: ubuntu-latest
