@@ -35,7 +35,7 @@ si surf logs
 
 Default endpoints:
 - MCP: `http://127.0.0.1:8932/mcp`
-- noVNC: `http://127.0.0.1:6080/surf.html`
+- noVNC: `http://127.0.0.1:6080/vnc.html`
 
 ## Profile persistence
 
@@ -113,7 +113,7 @@ si surf config set --key tunnel.fort_env_file --value /home/shawn/Development/sa
 
 For shared dev HTTPS viewing, prefer routing Surf through Viva's existing dev tunnel at `https://surf-browser.aureuma.ai`. When remote MCP access is needed, expose it at `https://surf-browser-mcp.aureuma.ai/mcp`. Shared Surf endpoints should also sit behind Cloudflare Access or an equivalent gate whenever possible.
 
-Surf serves a hardened noVNC viewer at `/surf.html` and redirects `/` there. The stock noVNC UI remains available at `/vnc.html` as a fallback.
+Surf serves the default stock noVNC UI at `/vnc.html` (including autoconnect behavior when passing URL parameters from noVNC), so browser sessions open to `noVNC` defaults to the stock interface.
 
 Quick ephemeral tunnel:
 

@@ -856,11 +856,8 @@ fn handle_session(command: SessionCommand) -> Result<i32> {
                     }
                     Ok(0)
                 }
-                "safari" => bail!(
-                    "safari existing-session discovery is not implemented yet; use chrome/chromium"
-                ),
                 _ => bail!(
-                    "unsupported browser {:?} (expected chrome|safari)",
+                    "unsupported browser {:?} (expected chrome)",
                     args.browser
                 ),
             }
@@ -915,11 +912,8 @@ fn handle_session(command: SessionCommand) -> Result<i32> {
                     }
                     Ok(0)
                 }
-                "safari" => bail!(
-                    "safari existing-session attach is not implemented yet; use chrome/chromium"
-                ),
                 _ => bail!(
-                    "unsupported browser {:?} (expected chrome|safari)",
+                    "unsupported browser {:?} (expected chrome)",
                     args.browser
                 ),
             }

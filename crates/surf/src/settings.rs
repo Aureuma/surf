@@ -237,7 +237,7 @@ pub fn apply_surf_settings_defaults(settings: &mut SurfSettings) {
         .trim()
         .to_lowercase();
     settings.existing_session.default_browser = match browser.as_str() {
-        "chrome" | "safari" => browser,
+        "chrome" => browser,
         _ => "chrome".to_owned(),
     };
 
@@ -430,8 +430,8 @@ pub fn set_surf_config_value(settings: &mut SurfSettings, key: &str, value: &str
         }
         "existing_session.default_browser" => {
             let browser = resolved_value.to_lowercase();
-            if browser != "chrome" && browser != "safari" {
-                bail!("invalid browser {resolved_value:?} (expected chrome|safari)");
+            if browser != "chrome" {
+                bail!("invalid browser {resolved_value:?} (expected chrome)");
             }
             settings.existing_session.default_browser = browser;
         }
@@ -621,7 +621,7 @@ mod tests {
         set_surf_config_value(&mut settings, "tunnel.mode", "token").unwrap();
         set_surf_config_value(&mut settings, "browser.host_mcp_port", "9999").unwrap();
         set_surf_config_value(&mut settings, "existing_session.mode", "interactive").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.default_browser", "safari").unwrap();
+        set_surf_config_value(&mut settings, "existing_session.default_browser", "chrome").unwrap();
         set_surf_config_value(&mut settings, "existing_session.chrome_cdp_port", "17777").unwrap();
         set_surf_config_value(&mut settings, "existing_session.humanize", "true").unwrap();
         set_surf_config_value(&mut settings, "existing_session.human_mouse_steps", "16").unwrap();
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(settings.tunnel.mode, "token");
         assert_eq!(settings.browser.host_mcp_port, 9999);
         assert_eq!(settings.existing_session.mode, "interactive");
-        assert_eq!(settings.existing_session.default_browser, "safari");
+        assert_eq!(settings.existing_session.default_browser, "chrome");
         assert_eq!(settings.existing_session.chrome_cdp_port, 17777);
         assert!(settings.existing_session.humanize);
         assert_eq!(settings.existing_session.human_mouse_steps, 16);

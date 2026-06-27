@@ -192,7 +192,7 @@ pub fn mcp_url(cfg: &BrowserConfig) -> String {
 
 pub fn novnc_url(cfg: &BrowserConfig) -> String {
     format!(
-        "http://{}:{}/surf.html",
+        "http://{}:{}/vnc.html",
         host_connect(&cfg.host_bind),
         cfg.host_novnc_port
     )
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn novnc_url_uses_hardened_surf_viewer() {
+    fn novnc_url_points_to_stock_novnc() {
         let cfg = BrowserConfig {
             image_name: "image".to_owned(),
             container_name: "container".to_owned(),
@@ -324,6 +324,6 @@ mod tests {
             allowed_hosts: "*".to_owned(),
         };
 
-        assert_eq!(novnc_url(&cfg), "http://127.0.0.1:6081/surf.html");
+        assert_eq!(novnc_url(&cfg), "http://127.0.0.1:6081/vnc.html");
     }
 }

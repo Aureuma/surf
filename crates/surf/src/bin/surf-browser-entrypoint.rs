@@ -23,169 +23,6 @@ const DEFAULT_BROWSER_CHANNEL: &str = "chromium";
 const DEFAULT_FLUXBOX_WORKSPACES: &str = "1";
 const STOCK_NOVNC_ROOT: &str = "/usr/share/novnc";
 const SURF_NOVNC_ROOT: &str = "/tmp/surf-novnc";
-const SURF_VIEWER_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Surf Browser</title>
-  <style>
-    html,
-    body {
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      background: #111827;
-      color: #f9fafb;
-      font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    #toolbar {
-      align-items: center;
-      background: #111827;
-      border-bottom: 1px solid #374151;
-      display: flex;
-      gap: 8px;
-      height: 36px;
-      padding: 0 10px;
-    }
-
-    #status {
-      color: #d1d5db;
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    button,
-    a {
-      background: #1f2937;
-      border: 1px solid #4b5563;
-      border-radius: 6px;
-      color: #f9fafb;
-      cursor: pointer;
-      font: inherit;
-      padding: 5px 9px;
-      text-decoration: none;
-    }
-
-    button:hover,
-    a:hover {
-      background: #374151;
-    }
-
-    #screen {
-      height: calc(100% - 37px);
-      outline: none;
-      overflow: hidden;
-      width: 100%;
-    }
-
-    #screen:focus-within {
-      box-shadow: inset 0 0 0 2px #22c55e;
-    }
-  </style>
-</head>
-<body>
-  <div id="toolbar">
-    <div id="status">Connecting</div>
-    <button id="focus_button" type="button">Focus</button>
-    <a href="/vnc.html?autoconnect=1&resize=scale">Stock noVNC</a>
-  </div>
-  <div id="screen" tabindex="-1" aria-label="Surf browser screen"></div>
-  <script type="module">
-    import RFB from "./core/rfb.js";
-
-    const screen = document.getElementById("screen");
-    const status = document.getElementById("status");
-    const focusButton = document.getElementById("focus_button");
-    let rfb;
-
-    function queryValue(name, fallback) {
-      const params = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      return params.get(name) ?? hashParams.get(name) ?? fallback;
-    }
-
-    function setStatus(message) {
-      status.textContent = message;
-    }
-
-    function websocketUrl() {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = queryValue("host", window.location.hostname);
-      const port = queryValue("port", window.location.port);
-      const path = queryValue("path", "websockify").replace(/^\/+/, "");
-      const authority = port ? `${host}:${port}` : host;
-      return `${protocol}//${authority}/${path}`;
-    }
-
-    function focusRemote() {
-      if (!rfb) return;
-      requestAnimationFrame(() => {
-        try {
-          rfb.focus();
-        } catch (_error) {
-          screen.focus();
-        }
-      });
-    }
-
-    function credentialsAreRequired() {
-      const password = window.prompt("VNC password");
-      rfb.sendCredentials({ password: password ?? "" });
-      focusRemote();
-    }
-
-    function connect() {
-      const password = queryValue("password", undefined);
-      const options = password === undefined ? {} : { credentials: { password } };
-      rfb = new RFB(screen, websocketUrl(), options);
-      rfb.viewOnly = queryValue("view_only", "false") === "true";
-      rfb.scaleViewport = queryValue("scale", "true") !== "false";
-      rfb.clipViewport = false;
-      rfb.addEventListener("connect", () => {
-        setStatus("Connected");
-        focusRemote();
-      });
-      rfb.addEventListener("disconnect", (event) => {
-        setStatus(event.detail.clean ? "Disconnected" : "Connection closed");
-      });
-      rfb.addEventListener("credentialsrequired", credentialsAreRequired);
-      rfb.addEventListener("desktopname", (event) => {
-        if (event.detail.name) setStatus(`Connected to ${event.detail.name}`);
-      });
-    }
-
-    for (const eventName of ["pointerdown", "mousedown", "touchstart", "click"]) {
-      screen.addEventListener(eventName, focusRemote, { capture: true, passive: true });
-    }
-    window.addEventListener("focus", focusRemote);
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) focusRemote();
-    });
-    document.addEventListener("keydown", focusRemote, { capture: true });
-    focusButton.addEventListener("click", focusRemote);
-
-    connect();
-  </script>
-</body>
-</html>
-"#;
-const SURF_INDEX_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="refresh" content="0; url=/surf.html">
-  <title>Surf Browser</title>
-</head>
-<body>
-  <a href="/surf.html">Surf Browser</a>
-</body>
-</html>
-"#;
 
 fn main() {
     if let Err(error) = run() {
@@ -341,8 +178,7 @@ fn prepare_novnc_web_root() -> Result<PathBuf> {
         let target = root.join(name);
         replace_symlink(&source, &target)?;
     }
-    write_text(root.join("surf.html"), SURF_VIEWER_HTML)?;
-    write_text(root.join("index.html"), SURF_INDEX_HTML)?;
+    replace_symlink(&root.join("vnc.html"), &root.join("index.html"))?;
     Ok(root)
 }
 
@@ -354,13 +190,6 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<()> {
     }
     symlink(source, target)
         .with_context(|| format!("link {} -> {}", target.display(), source.display()))?;
-    Ok(())
-}
-
-fn write_text(path: PathBuf, body: &str) -> Result<()> {
-    let mut file = File::create(&path).with_context(|| format!("create {}", path.display()))?;
-    file.write_all(body.as_bytes())
-        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -464,7 +293,7 @@ fn env_or(name: &str, default_value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SURF_INDEX_HTML, SURF_VIEWER_HTML, normalize_fluxbox_init};
+    use super::normalize_fluxbox_init;
 
     #[test]
     fn normalize_fluxbox_init_adds_single_workspace_when_missing() {
@@ -497,16 +326,4 @@ session.screen0.workspaces:	4
     }
 
     #[test]
-    fn surf_viewer_focuses_remote_screen() {
-        assert!(SURF_VIEWER_HTML.contains("rfb.focus()"));
-        assert!(SURF_VIEWER_HTML.contains("pointerdown"));
-        assert!(SURF_VIEWER_HTML.contains("keydown"));
-        assert!(SURF_VIEWER_HTML.contains("new RFB(screen, websocketUrl(), options)"));
-    }
-
-    #[test]
-    fn surf_index_redirects_to_hardened_viewer() {
-        assert!(SURF_INDEX_HTML.contains("url=/surf.html"));
-        assert!(SURF_INDEX_HTML.contains("href=\"/surf.html\""));
-    }
 }
