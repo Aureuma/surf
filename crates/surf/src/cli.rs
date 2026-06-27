@@ -269,10 +269,6 @@ struct BuildArgs {
 #[derive(Debug, Args)]
 struct StartArgs {
     #[arg(long)]
-    repo: Option<String>,
-    #[arg(long = "skip-build")]
-    skip_build: bool,
-    #[arg(long)]
     json: bool,
     #[command(flatten)]
     runtime: RuntimeOverrides,
@@ -533,12 +529,7 @@ fn handle_build(args: BuildArgs) -> Result<i32> {
 fn handle_start(args: StartArgs) -> Result<i32> {
     let mut cfg = default_config();
     let profile_dir_passed = apply_runtime_overrides(&mut cfg, &args.runtime);
-    let result = start_runtime(
-        &cfg,
-        args.repo.as_deref(),
-        args.skip_build,
-        profile_dir_passed,
-    )?;
+    let result = start_runtime(&cfg, profile_dir_passed)?;
     if args.json {
         print_json(&serde_json::json!({
             "ok": true,

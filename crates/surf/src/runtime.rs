@@ -87,8 +87,6 @@ pub fn build_runtime(
 
 pub fn start_runtime(
     cfg: &BrowserConfig,
-    repo: Option<&str>,
-    skip_build: bool,
     profile_dir_flag_passed: bool,
 ) -> Result<StartResult> {
     must_have_command("docker")?;
@@ -99,9 +97,6 @@ pub fn start_runtime(
     if let Some(host_path) = profile_mount.host_path.as_ref() {
         fs::create_dir_all(host_path)
             .with_context(|| format!("create profile directory {host_path}"))?;
-    }
-    if !skip_build {
-        build_runtime(&cfg.image_name, repo, None, None)?;
     }
     remove_docker_container(&cfg.container_name)?;
     ensure_docker_network(&cfg.network)?;
