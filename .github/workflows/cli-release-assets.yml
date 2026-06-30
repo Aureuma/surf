@@ -154,12 +154,12 @@ jobs:
       - name: Validate release tag and CLI version
         run: |
           set -euo pipefail
-          cargo run --locked -p xtask -- validate-release-version --tag "${{ needs.resolve-tag.outputs.tag }}"
+          cargo run --jobs 2 --locked -p xtask -- validate-release-version --tag "${{ needs.resolve-tag.outputs.tag }}"
 
       - name: Build release archive
         run: |
           set -euo pipefail
-          cargo run --locked -p xtask -- build-release-asset --version "${{ needs.resolve-tag.outputs.tag }}" --target "${{ matrix.target }}" --archive-suffix "${{ matrix.archive_suffix }}" --out-dir dist
+          cargo run --jobs 2 --locked -p xtask -- build-release-asset --version "${{ needs.resolve-tag.outputs.tag }}" --target "${{ matrix.target }}" --archive-suffix "${{ matrix.archive_suffix }}" --out-dir dist
           ls -lah dist
 
       - name: Upload workflow artifact
@@ -195,7 +195,7 @@ jobs:
       - name: Write release checksums
         run: |
           set -euo pipefail
-          cargo run --locked -p xtask -- write-checksums --dir dist
+          cargo run --jobs 2 --locked -p xtask -- write-checksums --dir dist
           ls -lah dist
 
       - name: Upload assets to GitHub Release
