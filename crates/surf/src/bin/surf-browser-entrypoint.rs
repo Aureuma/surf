@@ -1,9 +1,9 @@
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::symlink;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ fn run() -> Result<()> {
     fs::create_dir_all(&config.profile_dir)
         .with_context(|| format!("create {}", config.profile_dir.display()))?;
     ensure_fluxbox_single_workspace()?;
+    clear_stale_x_display(&config.display_num)?;
     let novnc_root = prepare_novnc_web_root()?;
 
     let status = Command::new("x11vnc")
@@ -55,7 +56,7 @@ fn run() -> Result<()> {
         bail!("x11vnc -storepasswd failed");
     }
 
-    spawn_logged_process(
+    let mut xvfb = spawn_logged_process(
         "Xvfb",
         [
             display.as_str(),
@@ -71,7 +72,7 @@ fn run() -> Result<()> {
     )?;
 
     let socket_path = PathBuf::from(format!("/tmp/.X11-unix/X{}", config.display_num));
-    wait_for_path(&socket_path, 50, Duration::from_millis(100))?;
+    wait_for_display(&mut xvfb, &socket_path, 50, Duration::from_millis(100))?;
 
     spawn_logged_process(
         "fluxbox",
@@ -137,12 +138,16 @@ fn run() -> Result<()> {
     bail!("exec corepack pnpm dlx failed: {error}");
 }
 
+/// Spawn a long-lived child, returning its handle.
+///
+/// The handle must be kept: dropping a `Child` does not wait, so an exited child
+/// stays a zombie until this process reaps it (see `reap_finished_children`).
 fn spawn_logged_process<I, S>(
     program: &str,
     args: I,
     log_path: &Path,
     envs: &[(&str, &str)],
-) -> Result<()>
+) -> Result<Child>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -152,14 +157,14 @@ where
     let stderr = stdout
         .try_clone()
         .with_context(|| format!("clone {}", log_path.display()))?;
-    Command::new(program)
+    let child = Command::new(program)
         .args(args.into_iter().map(|value| value.as_ref().to_owned()))
         .envs(envs.iter().copied())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .spawn()
         .with_context(|| format!("spawn {program}"))?;
-    Ok(())
+    Ok(child)
 }
 
 fn prepare_novnc_web_root() -> Result<PathBuf> {
@@ -193,14 +198,51 @@ fn replace_symlink(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_path(path: &Path, attempts: usize, interval: Duration) -> Result<()> {
+/// Remove X lock/socket left behind by a previous run.
+///
+/// A container filesystem survives `docker restart`, so an unclean shutdown
+/// leaves `/tmp/.X<n>-lock` and `/tmp/.X11-unix/X<n>` in place. Xvfb then refuses
+/// to start ("Server is already active for display <n>") and, because the stale
+/// socket satisfies a file-existence readiness check, the failure goes unnoticed:
+/// fluxbox and x11vnc follow it down and the container serves noVNC with no X
+/// behind it. Clearing them first is what `startx` and friends do.
+fn clear_stale_x_display(display_num: &str) -> Result<()> {
+    for path in [
+        PathBuf::from(format!("/tmp/.X{display_num}-lock")),
+        PathBuf::from(format!("/tmp/.X11-unix/X{display_num}")),
+    ] {
+        match fs::remove_file(&path) {
+            Ok(()) => eprintln!("removed stale {}", path.display()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("remove stale {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Wait for the X socket, failing fast if the server died instead.
+///
+/// The socket alone is not proof of life (see `clear_stale_x_display`), so the
+/// child is polled too: if Xvfb exits, report that rather than waiting out the
+/// timeout and letting dependents fail with a confusing "couldn't connect".
+fn wait_for_display(
+    child: &mut Child,
+    socket_path: &Path,
+    attempts: usize,
+    interval: Duration,
+) -> Result<()> {
     for _ in 0..attempts {
-        if path.exists() {
+        if let Some(status) = child.try_wait().context("poll Xvfb")? {
+            bail!("Xvfb exited before the display was ready ({status}); see /tmp/xvfb.log");
+        }
+        if socket_path.exists() {
             return Ok(());
         }
         thread::sleep(interval);
     }
-    bail!("timed out waiting for {}", path.display());
+    bail!("timed out waiting for {}", socket_path.display());
 }
 
 fn ensure_fluxbox_single_workspace() -> Result<()> {
@@ -324,6 +366,4 @@ session.screen0.workspaces:	4
 "
         ));
     }
-
-    #[test]
 }
