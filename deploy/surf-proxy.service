@@ -1,0 +1,15 @@
+[Unit]
+Description=Surf MCP auth gateway
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust the binary path to your install; the token resolves from
+# SURF_PROXY_TOKEN or ~/.si/surf/settings.toml [proxy.auth_token].
+ExecStart=%h/.local/bin/surf proxy --bind 0.0.0.0 --port 8931 --upstream http://127.0.0.1:8932
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
