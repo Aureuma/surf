@@ -21,20 +21,27 @@ pub struct TunnelStatusPayload {
     pub error: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TunnelStartOptions<'a> {
+    pub name: &'a str,
+    pub target_url: Option<&'a str>,
+    pub mode: Option<&'a str>,
+    pub token: Option<&'a str>,
+    pub fort_key: Option<&'a str>,
+    pub fort_env_file: Option<&'a str>,
+    pub image: Option<&'a str>,
+}
+
 pub fn start_tunnel(
     cfg: &BrowserConfig,
-    name: &str,
-    target_url: Option<&str>,
-    mode: Option<&str>,
-    token: Option<&str>,
-    fort_key: Option<&str>,
-    fort_env_file: Option<&str>,
-    image: Option<&str>,
+    opts: &TunnelStartOptions<'_>,
 ) -> Result<TunnelStatusPayload> {
     must_have_command("docker")?;
+    let name = opts.name.trim();
     let settings = load_surf_settings_or_default();
     let tunnel_cfg = settings.tunnel;
-    let target = target_url
+    let target = opts
+        .target_url
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
@@ -43,7 +50,8 @@ pub fn start_tunnel(
             (!value.is_empty()).then(|| value.to_owned())
         })
         .unwrap_or_else(|| novnc_url(cfg));
-    let mode = mode
+    let mode = opts
+        .mode
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_lowercase)
@@ -55,17 +63,20 @@ pub fn start_tunnel(
     if mode != "quick" && mode != "token" {
         bail!("invalid --mode {mode:?} (expected quick|token)");
     }
-    let image = image
+    let image = opts
+        .image
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| tunnel_cfg.image);
-    let fort_key = fort_key
+    let fort_key = opts
+        .fort_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| tunnel_cfg.fort_key.trim().to_owned());
-    let fort_env_file = fort_env_file
+    let fort_env_file = opts
+        .fort_env_file
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
@@ -78,18 +89,20 @@ pub fn start_tunnel(
         "run".to_owned(),
         "-d".to_owned(),
         "--name".to_owned(),
-        name.trim().to_owned(),
+        name.to_owned(),
         "--restart".to_owned(),
         "unless-stopped".to_owned(),
+        "--add-host".to_owned(),
+        "host.docker.internal:host-gateway".to_owned(),
         image,
         "tunnel".to_owned(),
         "--no-autoupdate".to_owned(),
     ];
     if mode == "quick" {
         run_args.push("--url".to_owned());
-        run_args.push(target);
+        run_args.push(tunnel_origin_url(&target));
     } else {
-        let token = resolve_token(token, &fort_key, &fort_env_file)?;
+        let token = resolve_token(opts.token, &fort_key, &fort_env_file)?;
         if token.trim().is_empty() {
             bail!(
                 "tunnel token mode requires token value (use --token, SURF_CLOUDFLARE_TUNNEL_TOKEN, or Fort-backed --fort-key/--fort-env-file)"
@@ -104,12 +117,29 @@ pub fn start_tunnel(
     let url = extract_try_cloudflare_url(&fetch_container_logs(name, 200));
     Ok(TunnelStatusPayload {
         ok: true,
-        container_name: name.trim().to_owned(),
+        container_name: name.to_owned(),
         running: true,
         url,
         mode,
         error: String::new(),
     })
+}
+
+/// Rewrite loopback origins so the cloudflared container can reach host
+/// services: inside the container `127.0.0.1` is the container itself, while
+/// `host.docker.internal` is mapped to the host gateway (see `--add-host`).
+pub fn tunnel_origin_url(target: &str) -> String {
+    let Ok(mut url) = url::Url::parse(target.trim()) else {
+        return target.trim().to_owned();
+    };
+    if matches!(
+        url.host_str().map(str::to_lowercase).as_deref(),
+        Some("127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+    ) && url.set_host(Some("host.docker.internal")).is_ok()
+    {
+        return url.to_string();
+    }
+    target.trim().to_owned()
 }
 
 pub fn stop_tunnel(name: &str) -> Result<()> {
@@ -213,10 +243,9 @@ fn infer_repo_env_from_path(path: &str) -> Result<(&str, &str)> {
 }
 
 pub fn fort_get(repo: &str, env: &str, key: &str) -> Result<String> {
-    crate::runtime::must_have_command("si")?;
-    let output = Command::new("si")
+    crate::runtime::must_have_command("fort")?;
+    let output = Command::new("fort")
         .args([
-            "fort",
             "get",
             "--repo",
             repo.trim(),
@@ -226,15 +255,37 @@ pub fn fort_get(repo: &str, env: &str, key: &str) -> Result<String> {
             key.trim(),
         ])
         .output()
-        .with_context(|| format!("spawn si fort get {key}"))?;
+        .with_context(|| format!("spawn fort get {key}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let message = if stderr.is_empty() {
-            "si fort get failed".to_owned()
+            "fort get failed".to_owned()
         } else {
             stderr
         };
-        bail!("si fort get {key} failed: {message}");
+        bail!("fort get {key} failed: {message}");
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tunnel_origin_url;
+
+    #[test]
+    fn tunnel_origin_url_rewrites_loopback_for_container() {
+        assert_eq!(
+            tunnel_origin_url("http://127.0.0.1:6080"),
+            "http://host.docker.internal:6080/"
+        );
+        assert_eq!(
+            tunnel_origin_url("http://localhost:8931/vnc.html"),
+            "http://host.docker.internal:8931/vnc.html"
+        );
+        assert_eq!(
+            tunnel_origin_url("http://192.168.1.20:6080"),
+            "http://192.168.1.20:6080"
+        );
+        assert_eq!(tunnel_origin_url("not-a-url"), "not-a-url");
+    }
 }

@@ -7,7 +7,7 @@ COPY crates ./crates
 
 RUN cargo build --release --locked -p surf --bin surf-browser-entrypoint
 
-FROM mcr.microsoft.com/playwright:v1.58.2-noble
+FROM mcr.microsoft.com/playwright:v1.64.0-noble
 
 USER root
 
@@ -18,9 +18,13 @@ RUN apt-get update \
     fluxbox \
     novnc \
     websockify \
+    wmctrl \
     x11vnc \
     xterm \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g @playwright/mcp@0.0.83 \
+  && npm cache clean --force \
+  && playwright-mcp install-browser chrome-for-testing
 
 COPY --from=surf-browser-entrypoint-build /workspace/target/release/surf-browser-entrypoint /usr/local/bin/surf-browser-entrypoint
 
@@ -30,6 +34,6 @@ RUN chmod +x /usr/local/bin/surf-browser-entrypoint \
 
 USER pwuser
 
-EXPOSE 8931 6080 5900
+EXPOSE 8931-8938 6080 5900
 
 ENTRYPOINT ["/usr/local/bin/surf-browser-entrypoint"]

@@ -1,35 +1,28 @@
-use anyhow::{Result, bail};
-use clap::{ArgAction, Args, Parser, Subcommand};
+use anyhow::Result;
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use serde::Serialize;
 
-use crate::browser::{BrowserConfig, default_config, resolve_vnc_password};
-use crate::constants::{SURF_VERSION, USAGE_TEXT};
-use crate::extension::{extension_doctor, extension_path, install_extension};
-use crate::host::{
-    default_host_profile_name, host_logs, host_status, start_host_browser, stop_host_browser,
+use crate::browser::{
+    BrowserConfig, agent_host_port, agent_mcp_url, agent_profile_dir,
+    apply_container_profile_default, default_config, generate_secure_secret, resolve_vnc_password,
 };
-use crate::paths::sanitize_profile_name;
-use crate::proxy::run_proxy;
+use crate::constants::SURF_VERSION;
+use crate::proxy::{ProxyConfig, run_proxy};
 use crate::runtime::{
-    build_runtime, start_runtime, status_runtime, stop_runtime, stream_container_logs,
-};
-use crate::session::{
-    AttachedSession, SessionActionRequest, SessionHumanOptions, choose_chrome_target,
-    current_timestamp_rfc3339, default_session_attach_timeout, default_session_browser,
-    default_session_chrome_host, default_session_chrome_port, default_session_human_max_delay_ms,
-    default_session_human_min_delay_ms, default_session_human_mouse_steps,
-    default_session_human_scroll_step_px, default_session_human_type_max_delay_ms,
-    default_session_human_type_min_delay_ms, default_session_humanize, default_session_mode,
-    delete_attached_session, discover_chrome_targets, list_attached_sessions,
-    normalize_session_mode, read_attached_session, run_session_action, write_attached_session,
+    build_runtime, container_identity, start_runtime, status_runtime, stop_runtime,
+    stream_container_logs, switch_agent_workspace,
 };
 use crate::settings::{
     default_surf_settings, load_surf_settings_or_default, save_surf_settings, set_surf_config_value,
 };
-use crate::tunnel::{start_tunnel, stop_tunnel, tunnel_logs, tunnel_status};
+use crate::tunnel::{TunnelStartOptions, start_tunnel, stop_tunnel, tunnel_logs, tunnel_status};
 
 #[derive(Debug, Parser)]
-#[command(disable_help_flag = true, disable_version_flag = true)]
+#[command(
+    name = "surf",
+    version = SURF_VERSION,
+    about = "Playwright MCP server: one shared headed Chromium per profile, driven remotely over MCP with a noVNC viewer"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -37,238 +30,152 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Build the browser runtime image
     Build(BuildArgs),
+    /// Start the browser runtime container
     Start(StartArgs),
+    /// Stop and remove the runtime container
     Stop(StopArgs),
+    /// Check runtime health (container, MCP, noVNC)
     Status(StatusArgs),
+    /// Stream runtime container logs
     Logs(LogsArgs),
-    Session {
-        #[command(subcommand)]
-        command: SessionCommand,
-    },
+    /// Manage the surf settings file
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Start the authenticated MCP gateway proxy
     Proxy(ProxyArgs),
-    Host {
+    /// Manage browser agents (contexts) inside the runtime container
+    Agent {
         #[command(subcommand)]
-        command: HostCommand,
+        command: AgentCommand,
     },
+    /// Manage cloudflare tunnels for public access
     Tunnel {
         #[command(subcommand)]
         command: TunnelCommand,
     },
-    Extension {
-        #[command(subcommand)]
-        command: ExtensionCommand,
-    },
+    /// Print the surf version
     Version,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
+    /// Print settings (TOML by default)
     Show(ConfigShowArgs),
+    /// Alias for show
     Get(ConfigShowArgs),
+    /// Set one settings key (e.g. tunnel.mode)
     Set(ConfigSetArgs),
+    /// Print the settings file path
     Path,
+    /// Write default settings (overwrites with --force)
     Init(ConfigInitArgs),
 }
 
 #[derive(Debug, Subcommand)]
-enum HostCommand {
-    Start(HostStartArgs),
-    Stop(HostProfileArgs),
-    Status(HostProfileArgs),
-    Logs(HostLogsArgs),
+enum AgentCommand {
+    /// List agents with slots, workspaces, ports, and MCP URLs
+    List(AgentListArgs),
+    /// Switch the noVNC viewer to an agent's workspace
+    View(AgentViewArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum TunnelCommand {
+    /// Start a tunnel container (quick or token mode)
     Start(TunnelStartArgs),
+    /// Stop and remove a tunnel container
     Stop(TunnelNameArgs),
+    /// Show tunnel status and public URL
     Status(TunnelNameArgs),
+    /// Stream tunnel container logs
     Logs(TunnelLogsArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum ExtensionCommand {
-    Install(ExtensionInstallArgs),
-    Path(ExtensionPathArgs),
-    Doctor(ExtensionDoctorArgs),
-}
-
-#[derive(Debug, Subcommand)]
-enum SessionCommand {
-    Discover(SessionDiscoverArgs),
-    Scan(SessionDiscoverArgs),
-    Attach(SessionAttachArgs),
-    List(SessionListArgs),
-    Ls(SessionListArgs),
-    Detach(SessionDetachArgs),
-    Rm(SessionDetachArgs),
-    Remove(SessionDetachArgs),
-    Act(SessionActArgs),
-    Action(SessionActArgs),
 }
 
 #[derive(Debug, Args)]
 struct ConfigShowArgs {
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct ConfigSetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Settings key, e.g. tunnel.mode or proxy.auth_token")]
     key: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Value to store (empty clears)")]
     value: String,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct ConfigInitArgs {
-    #[arg(long)]
+    #[arg(long, help = "Overwrite an existing settings file")]
     force: bool,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct SessionDiscoverArgs {
-    #[arg(long, default_value_t = default_session_browser())]
-    browser: String,
-    #[arg(long, default_value_t = default_session_chrome_host())]
-    host: String,
-    #[arg(long = "cdp-port", default_value_t = default_session_chrome_port())]
-    cdp_port: i32,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct SessionAttachArgs {
-    #[arg(long, default_value_t = default_session_browser())]
-    browser: String,
-    #[arg(long, default_value_t = default_session_chrome_host())]
-    host: String,
-    #[arg(long = "cdp-port", default_value_t = default_session_chrome_port())]
-    cdp_port: i32,
-    #[arg(long = "id")]
-    target_id: Option<String>,
-    #[arg(long = "url-contains")]
-    url_contains: Option<String>,
-    #[arg(long = "title-contains")]
-    title_contains: Option<String>,
-    #[arg(long = "session")]
-    session_name: Option<String>,
-    #[arg(long, default_value_t = default_session_mode())]
-    mode: String,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct SessionListArgs {
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct SessionDetachArgs {
-    #[arg(long = "session")]
-    session_name: String,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct SessionActArgs {
-    #[arg(long = "session")]
-    session_name: String,
-    #[arg(long)]
-    action: String,
-    #[arg(long)]
-    selector: Option<String>,
-    #[arg(long)]
-    text: Option<String>,
-    #[arg(long)]
-    expr: Option<String>,
-    #[arg(long)]
-    out: Option<String>,
-    #[arg(long = "delta-y", default_value_t = 0)]
-    delta_y: i32,
-    #[arg(long, default_value_t = 0)]
-    steps: i32,
-    #[arg(long, default_value_t = default_session_humanize(), action = ArgAction::Set)]
-    human: bool,
-    #[arg(long = "min-delay-ms", default_value_t = default_session_human_min_delay_ms())]
-    min_delay_ms: i32,
-    #[arg(long = "max-delay-ms", default_value_t = default_session_human_max_delay_ms())]
-    max_delay_ms: i32,
-    #[arg(long = "type-min-delay-ms", default_value_t = default_session_human_type_min_delay_ms())]
-    type_min_delay_ms: i32,
-    #[arg(long = "type-max-delay-ms", default_value_t = default_session_human_type_max_delay_ms())]
-    type_max_delay_ms: i32,
-    #[arg(long = "mouse-steps", default_value_t = default_session_human_mouse_steps())]
-    mouse_steps: i32,
-    #[arg(long = "scroll-step-px", default_value_t = default_session_human_scroll_step_px())]
-    scroll_step_px: i32,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args, Clone, Default)]
 struct RuntimeOverrides {
-    #[arg(long)]
+    #[arg(long, help = "Browser image tag")]
     image: Option<String>,
-    #[arg(long = "name")]
+    #[arg(long = "name", help = "Container name")]
     container_name: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Docker network")]
     network: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Profile name (isolated browser state)")]
     profile: Option<String>,
-    #[arg(long = "profile-dir")]
+    #[arg(long, help = "Comma-separated agent names (one browser context each)")]
+    agents: Option<String>,
+    #[arg(
+        long = "profile-dir",
+        help = "Host directory for the container profile"
+    )]
     profile_dir: Option<String>,
-    #[arg(long = "host-bind")]
-    host_bind: Option<String>,
-    #[arg(long = "host-mcp-port")]
+    #[arg(long = "host-mcp-bind", help = "Host bind for raw MCP (keep loopback)")]
+    host_mcp_bind: Option<String>,
+    #[arg(long = "host-novnc-bind", help = "Host bind for the noVNC viewer")]
+    host_novnc_bind: Option<String>,
+    #[arg(long = "host-mcp-port", help = "Host port for raw MCP")]
     host_mcp_port: Option<i32>,
-    #[arg(long = "host-novnc-port")]
+    #[arg(long = "host-novnc-port", help = "Host port for the noVNC viewer")]
     host_novnc_port: Option<i32>,
-    #[arg(long = "mcp-port")]
+    #[arg(long = "mcp-port", help = "Container port for MCP")]
     mcp_port: Option<i32>,
-    #[arg(long = "novnc-port")]
+    #[arg(long = "novnc-port", help = "Container port for noVNC")]
     novnc_port: Option<i32>,
-    #[arg(long = "vnc-password")]
+    #[arg(long = "vnc-password", help = "Viewer password (generated when empty)")]
     vnc_password: Option<String>,
-    #[arg(long = "mcp-version")]
-    mcp_version: Option<String>,
-    #[arg(long = "browser")]
+    #[arg(
+        long = "browser",
+        help = "Browser channel (chromium, chrome, firefox, webkit, msedge)"
+    )]
     browser_channel: Option<String>,
-    #[arg(long = "allowed-hosts")]
+    #[arg(long = "allowed-hosts", help = "MCP allowed-hosts value")]
     allowed_hosts: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct BuildArgs {
-    #[arg(long)]
+    #[arg(long, help = "Surf repo root (auto-detected)")]
     repo: Option<String>,
-    #[arg(long = "context")]
+    #[arg(long = "context", help = "Docker build context dir")]
     context_dir: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Dockerfile path")]
     dockerfile: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Image tag to build")]
     image: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct StartArgs {
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
     #[command(flatten)]
     runtime: RuntimeOverrides,
@@ -276,15 +183,15 @@ struct StartArgs {
 
 #[derive(Debug, Args)]
 struct StopArgs {
-    #[arg(long = "name")]
+    #[arg(long = "name", help = "Container name")]
     container_name: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct StatusArgs {
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
     #[command(flatten)]
     runtime: RuntimeOverrides,
@@ -292,128 +199,110 @@ struct StatusArgs {
 
 #[derive(Debug, Args)]
 struct LogsArgs {
-    #[arg(long = "name")]
+    #[arg(long = "name", help = "Container name")]
     container_name: Option<String>,
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = 200, help = "Lines of history to show")]
     tail: i32,
-    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    #[arg(long, default_value_t = true, action = ArgAction::Set, help = "Follow log output")]
     follow: bool,
 }
 
 #[derive(Debug, Args)]
-struct HostStartArgs {
-    #[arg(long)]
-    profile: Option<String>,
-    #[arg(long = "profile-dir")]
-    profile_dir: Option<String>,
-    #[arg(long = "browser-path")]
-    browser_path: Option<String>,
-    #[arg(long = "cdp-port")]
-    cdp_port: Option<i32>,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct HostProfileArgs {
-    #[arg(long)]
-    profile: Option<String>,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Args)]
-struct HostLogsArgs {
-    #[arg(long)]
-    profile: Option<String>,
-}
-
-#[derive(Debug, Args)]
 struct TunnelStartArgs {
-    #[arg(long)]
+    #[arg(long, help = "Tunnel container name")]
     name: Option<String>,
-    #[arg(long = "target-url")]
+    #[arg(
+        long = "target-url",
+        help = "Origin URL (quick mode; defaults to the viewer)"
+    )]
     target_url: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Tunnel mode: quick or token")]
     mode: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Tunnel token (token mode)")]
     token: Option<String>,
-    #[arg(long = "fort-key", alias = "vault-key")]
+    #[arg(
+        long = "fort-key",
+        alias = "vault-key",
+        help = "Fort key holding the tunnel token"
+    )]
     fort_key: Option<String>,
-    #[arg(long = "fort-env-file")]
+    #[arg(long = "fort-env-file", help = "safe env file selecting fort repo/env")]
     fort_env_file: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "cloudflared image")]
     image: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct TunnelNameArgs {
-    #[arg(long)]
+    #[arg(long, help = "Tunnel container name")]
     name: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
 struct TunnelLogsArgs {
-    #[arg(long)]
+    #[arg(long, help = "Tunnel container name")]
     name: Option<String>,
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = 200, help = "Lines of history to show")]
     tail: i32,
-    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    #[arg(long, default_value_t = true, action = ArgAction::Set, help = "Follow log output")]
     follow: bool,
 }
 
 #[derive(Debug, Args)]
-struct ExtensionInstallArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    dest: Option<String>,
-    #[arg(long)]
+struct AgentListArgs {
+    #[arg(long = "name", help = "Container name")]
+    container_name: Option<String>,
+    #[arg(long, help = "Print as JSON")]
     json: bool,
 }
 
 #[derive(Debug, Args)]
-struct ExtensionPathArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    source: bool,
-}
-
-#[derive(Debug, Args)]
-struct ExtensionDoctorArgs {
-    #[arg(long)]
-    path: Option<String>,
-    #[arg(long)]
-    json: bool,
+struct AgentViewArgs {
+    #[arg(help = "Agent name")]
+    name: String,
+    #[arg(long = "name", help = "Container name")]
+    container_name: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct ProxyArgs {
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "0.0.0.0", help = "Interface to listen on")]
     bind: String,
-    #[arg(long, default_value_t = 8931)]
+    #[arg(long, default_value_t = 8931, help = "Port to listen on")]
     port: u16,
-    #[arg(long, default_value = "http://127.0.0.1:8932")]
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:8932",
+        help = "Upstream raw MCP base URL"
+    )]
     upstream: String,
+    #[arg(
+        long,
+        help = "Auth token (defaults to settings, generated on first run)"
+    )]
+    token: Option<String>,
+    #[arg(
+        long,
+        help = "Comma-separated agents to serve (must match the running container)"
+    )]
+    agents: Option<String>,
 }
 
 pub fn run(raw_args: &[String]) -> Result<i32> {
     if raw_args.is_empty() {
-        print!("{USAGE_TEXT}");
+        print!("{}", Cli::command().render_help());
         return Ok(1);
     }
 
     match raw_args[0].as_str() {
         "help" | "-h" | "--help" => {
-            print!("{USAGE_TEXT}");
-            return Ok(0);
+            return print_help_for(&raw_args[1..]);
         }
-        "version" | "--version" | "-v" => {
+        "version" | "--version" | "-v" | "-V" => {
             println!("{SURF_VERSION}");
             return Ok(0);
         }
@@ -422,7 +311,7 @@ pub fn run(raw_args: &[String]) -> Result<i32> {
 
     let cli = Cli::parse_from(std::iter::once("surf".to_owned()).chain(raw_args.iter().cloned()));
     let Some(command) = cli.command else {
-        print!("{USAGE_TEXT}");
+        print!("{}", Cli::command().render_help());
         return Ok(1);
     };
 
@@ -437,15 +326,27 @@ pub fn run(raw_args: &[String]) -> Result<i32> {
         Command::Stop(args) => handle_stop(args),
         Command::Status(args) => handle_status(args),
         Command::Logs(args) => handle_logs(args),
-        Command::Session { command } => handle_session(command),
-        Command::Proxy(args) => {
-            run_proxy(&args.bind, args.port, &args.upstream)?;
-            Ok(0)
-        }
-        Command::Host { command } => handle_host(command),
+        Command::Proxy(args) => handle_proxy(args),
+        Command::Agent { command } => handle_agent(command),
         Command::Tunnel { command } => handle_tunnel(command),
-        Command::Extension { command } => handle_extension(command),
     }
+}
+
+fn print_help_for(path: &[String]) -> Result<i32> {
+    let mut command = Cli::command();
+    for segment in path {
+        let Some(next) = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == segment)
+            .cloned()
+        else {
+            print!("{}", Cli::command().render_help());
+            return Ok(0);
+        };
+        command = next;
+    }
+    print!("{}", command.render_long_help());
+    Ok(0)
 }
 
 fn handle_config(command: ConfigCommand) -> Result<i32> {
@@ -530,6 +431,15 @@ fn handle_start(args: StartArgs) -> Result<i32> {
     let mut cfg = default_config();
     let profile_dir_passed = apply_runtime_overrides(&mut cfg, &args.runtime);
     let result = start_runtime(&cfg, profile_dir_passed)?;
+    // Persist a generated viewer password so `config show` stays truthful
+    // across restarts instead of silently rotating the viewer credential.
+    if result.viewer_password_generated
+        && let Some(password) = result.viewer_password.as_ref()
+    {
+        let mut settings = load_surf_settings_or_default();
+        settings.browser.vnc_password = password.clone();
+        save_surf_settings(&settings)?;
+    }
     if args.json {
         print_json(&serde_json::json!({
             "ok": true,
@@ -553,6 +463,7 @@ fn handle_start(args: StartArgs) -> Result<i32> {
             "  profile={} profile_dir={}",
             result.config.profile_name, result.config.profile_dir
         );
+        println!("  agents={}", result.config.agents.join(","));
         println!("  mcp_url={}", result.mcp_url);
         println!("  novnc_url={}", result.novnc_url);
         if let Some(password) = result.viewer_password.as_ref() {
@@ -584,6 +495,19 @@ fn handle_stop(args: StopArgs) -> Result<i32> {
 fn handle_status(args: StatusArgs) -> Result<i32> {
     let mut cfg = default_config();
     let profile_dir_passed = apply_runtime_overrides(&mut cfg, &args.runtime);
+    // Prefer the running container's actual profile/agents over settings.
+    if let Some((profile, agents)) = container_identity(&cfg.container_name) {
+        if args.runtime.profile.is_none() && !profile.is_empty() {
+            cfg.profile_name = profile;
+            if !profile_dir_passed {
+                cfg.profile_dir.clear();
+                apply_container_profile_default(false, &mut cfg);
+            }
+        }
+        if args.runtime.agents.is_none() {
+            cfg.agents = agents;
+        }
+    }
     let status = status_runtime(&cfg, profile_dir_passed)?;
     if args.json {
         print_json(&serde_json::json!({
@@ -610,6 +534,12 @@ fn handle_status(args: StatusArgs) -> Result<i32> {
             "  mcp_ready={} host_code={} container_code={}",
             status.mcp_ready, status.mcp_host_code, status.mcp_container_code
         );
+        for agent in &status.agents {
+            println!(
+                "  agent={} slot={} ready={} mcp_url={}",
+                agent.name, agent.slot, agent.ready, agent.mcp_url
+            );
+        }
         println!(
             "  novnc_ready={} host_code={} container_code={}",
             status.novnc_ready, status.novnc_host_code, status.novnc_container_code
@@ -628,64 +558,169 @@ fn handle_logs(args: LogsArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn handle_host(command: HostCommand) -> Result<i32> {
+fn handle_proxy(args: ProxyArgs) -> Result<i32> {
+    let mut cfg = default_config();
+    if let Some(agents) = args.agents.as_deref() {
+        let names: Vec<String> = agents
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        cfg.agents = crate::browser::normalize_agents(&names);
+    } else if let Some((_, agents)) = container_identity(&cfg.container_name) {
+        // Serve the running container's agents when no explicit list is given.
+        cfg.agents = agents;
+    }
+    let token = args
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| crate::paths::env_trimmed("SURF_PROXY_TOKEN"))
+        .or_else(|| {
+            let token = load_surf_settings_or_default().proxy.auth_token;
+            (!token.trim().is_empty()).then(|| token.trim().to_owned())
+        });
+    let mut settings = load_surf_settings_or_default();
+    let mut dirty = false;
+    let token = match token {
+        Some(token) => token,
+        None => {
+            // First run: generate a stable token and persist it so agents can
+            // be configured once. Printed only here; afterwards read it back
+            // with `surf config show`.
+            let token = generate_secure_secret(48);
+            settings.proxy.auth_token = token.clone();
+            println!("generated proxy auth token: {token}");
+            println!("configure MCP clients with this token (it is not shown again)");
+            dirty = true;
+            token
+        }
+    };
+    for agent in &cfg.agents {
+        let missing = settings
+            .proxy
+            .tokens
+            .get(agent)
+            .map(|t| t.trim().is_empty())
+            .unwrap_or(true);
+        if missing {
+            let agent_token = generate_secure_secret(48);
+            println!("generated proxy token for agent '{agent}': {agent_token}");
+            settings.proxy.tokens.insert(agent.clone(), agent_token);
+            dirty = true;
+        }
+    }
+    if dirty {
+        save_surf_settings(&settings)?;
+    }
+    run_proxy(&ProxyConfig {
+        bind: args.bind,
+        port: args.port,
+        upstream: args.upstream,
+        main_token: token,
+        agents: cfg.agents,
+        tokens: settings.proxy.tokens,
+    })?;
+    Ok(0)
+}
+fn handle_agent(command: AgentCommand) -> Result<i32> {
     match command {
-        HostCommand::Start(args) => {
-            let profile = args.profile.unwrap_or_else(default_host_profile_name);
-            let state = start_host_browser(
-                &profile,
-                args.profile_dir.as_deref(),
-                args.browser_path.as_deref(),
-                args.cdp_port,
-            )?;
+        AgentCommand::List(args) => {
+            let mut cfg = default_config();
+            if let Some(name) = args.container_name.as_deref() {
+                cfg.container_name = name.trim().to_owned();
+            }
+            // Prefer the running container's actual agents over settings.
+            if let Some((profile, agents)) = container_identity(&cfg.container_name) {
+                if !profile.is_empty() {
+                    cfg.profile_name = profile;
+                }
+                cfg.agents = agents;
+                // The container's profile may differ from settings; re-resolve.
+                cfg.profile_dir.clear();
+                apply_container_profile_default(false, &mut cfg);
+            }
+            let settings = load_surf_settings_or_default();
+            let rows: Vec<serde_json::Value> = cfg
+                .agents
+                .iter()
+                .enumerate()
+                .map(|(slot, agent)| {
+                    serde_json::json!({
+                        "name": agent,
+                        "slot": slot,
+                        "workspace": format!("{}/{}", cfg.profile_name, agent),
+                        "host_port": agent_host_port(&cfg, slot),
+                        "mcp_url": agent_mcp_url(&cfg, slot),
+                        "proxy_path": format!("/agent/{agent}/mcp"),
+                        "profile_dir": agent_profile_dir(&cfg, agent),
+                        "token_configured": settings
+                            .proxy
+                            .tokens
+                            .get(agent)
+                            .is_some_and(|t| !t.trim().is_empty()),
+                    })
+                })
+                .collect();
             if args.json {
                 print_json(&serde_json::json!({
                     "ok": true,
-                    "state": state,
-                    "cdp_url": format!("http://127.0.0.1:{}", state.cdp_port),
+                    "command": "agent list",
+                    "profile": cfg.profile_name,
+                    "agents": rows,
                 }))?;
             } else {
-                println!("surf host start");
-                println!("  profile={} pid={}", state.profile, state.pid);
-                println!("  browser={}", state.browser_path);
-                println!("  profile_dir={}", state.profile_dir);
-                println!("  cdp_url=http://127.0.0.1:{}", state.cdp_port);
-                println!("  log={}", state.log_file);
+                println!("surf agent list (profile={})", cfg.profile_name);
+                for row in &rows {
+                    println!(
+                        "  slot={} name={} workspace={} port={} token={}",
+                        row["slot"],
+                        row["name"].as_str().unwrap_or(""),
+                        row["workspace"].as_str().unwrap_or(""),
+                        row["host_port"],
+                        if row["token_configured"].as_bool().unwrap_or(false) {
+                            "yes"
+                        } else {
+                            "no"
+                        },
+                    );
+                    println!("    mcp_url={}", row["mcp_url"].as_str().unwrap_or(""));
+                    println!(
+                        "    proxy_path={} profile_dir={}",
+                        row["proxy_path"].as_str().unwrap_or(""),
+                        row["profile_dir"].as_str().unwrap_or("")
+                    );
+                }
             }
             Ok(0)
         }
-        HostCommand::Stop(args) => {
-            let profile = args.profile.unwrap_or_else(default_host_profile_name);
-            let state = stop_host_browser(&profile)?;
-            if args.json {
-                print_json(&serde_json::json!({
-                    "ok": true,
-                    "profile": profile,
-                }))?;
-            } else {
-                println!("surf host stop: profile={} pid={}", profile, state.pid);
+        AgentCommand::View(args) => {
+            let mut cfg = default_config();
+            if let Some(name) = args.container_name.as_deref() {
+                cfg.container_name = name.trim().to_owned();
             }
-            Ok(0)
-        }
-        HostCommand::Status(args) => {
-            let profile = args.profile.unwrap_or_else(default_host_profile_name);
-            let status = host_status(&profile)?;
-            if args.json {
-                print_json(&status)?;
-            } else {
-                println!("surf host status");
-                println!(
-                    "  profile={} pid={} alive={}",
-                    status.profile, status.pid, status.alive
+            if let Some((profile, agents)) = container_identity(&cfg.container_name) {
+                if !profile.is_empty() {
+                    cfg.profile_name = profile;
+                }
+                cfg.agents = agents;
+            }
+            let wanted = crate::paths::sanitize_profile_name(&args.name);
+            let Some(slot) = cfg.agents.iter().position(|a| a == &wanted) else {
+                anyhow::bail!(
+                    "unknown agent '{wanted}' (profile {}: {})",
+                    cfg.profile_name,
+                    cfg.agents.join(", ")
                 );
-                println!("  cdp_url={} status={}", status.cdp_url, status.cdp_status);
-                println!("  profile_dir={}", status.state.profile_dir);
-            }
-            Ok(if status.ok { 0 } else { 1 })
-        }
-        HostCommand::Logs(args) => {
-            let profile = args.profile.unwrap_or_else(default_host_profile_name);
-            print!("{}", host_logs(&profile)?);
+            };
+            switch_agent_workspace(&cfg.container_name, slot)?;
+            println!(
+                "surf agent view: workspace {slot} ({}/{wanted})",
+                cfg.profile_name
+            );
             Ok(0)
         }
     }
@@ -702,13 +737,15 @@ fn handle_tunnel(command: TunnelCommand) -> Result<i32> {
                 .unwrap_or(settings.tunnel.container_name);
             let payload = start_tunnel(
                 &cfg,
-                &name,
-                args.target_url.as_deref(),
-                args.mode.as_deref(),
-                args.token.as_deref(),
-                args.fort_key.as_deref(),
-                args.fort_env_file.as_deref(),
-                args.image.as_deref(),
+                &TunnelStartOptions {
+                    name: &name,
+                    target_url: args.target_url.as_deref(),
+                    mode: args.mode.as_deref(),
+                    token: args.token.as_deref(),
+                    fort_key: args.fort_key.as_deref(),
+                    fort_env_file: args.fort_env_file.as_deref(),
+                    image: args.image.as_deref(),
+                },
             )?;
             if args.json {
                 print_json(&payload)?;
@@ -769,211 +806,6 @@ fn handle_tunnel(command: TunnelCommand) -> Result<i32> {
         }
     }
 }
-
-fn handle_extension(command: ExtensionCommand) -> Result<i32> {
-    match command {
-        ExtensionCommand::Install(args) => {
-            let path = install_extension(args.repo.as_deref(), args.dest.as_deref())?;
-            if args.json {
-                print_json(&serde_json::json!({
-                    "ok": true,
-                    "path": path,
-                }))?;
-            } else {
-                println!("surf extension installed: {}", path.display());
-                println!("Load unpacked in chrome://extensions");
-            }
-            Ok(0)
-        }
-        ExtensionCommand::Path(args) => {
-            println!(
-                "{}",
-                extension_path(args.repo.as_deref(), args.source)?.display()
-            );
-            Ok(0)
-        }
-        ExtensionCommand::Doctor(args) => {
-            let doctor = extension_doctor(args.path.as_deref())?;
-            if args.json {
-                print_json(&doctor)?;
-            } else if !doctor.ok {
-                bail!(
-                    "extension not installed at {} (run `surf extension install`)",
-                    doctor.path
-                );
-            } else {
-                println!("surf extension doctor: ok");
-                println!("  path={}", doctor.path);
-                println!(
-                    "  next=chrome://extensions -> Load unpacked -> {}",
-                    doctor.path
-                );
-            }
-            Ok(if doctor.ok { 0 } else { 1 })
-        }
-    }
-}
-
-fn handle_session(command: SessionCommand) -> Result<i32> {
-    match command {
-        SessionCommand::Discover(args) | SessionCommand::Scan(args) => {
-            let adapter = args.browser.trim().to_lowercase();
-            match adapter.as_str() {
-                "chrome" | "chromium" => {
-                    let targets = discover_chrome_targets(
-                        &args.host,
-                        args.cdp_port,
-                        default_session_attach_timeout(),
-                    )?;
-                    if args.json {
-                        print_json(&serde_json::json!({
-                            "ok": true,
-                            "browser": "chrome",
-                            "targets": targets,
-                        }))?;
-                    } else if targets.is_empty() {
-                        println!("no browser targets discovered");
-                    } else {
-                        println!("available browser targets:");
-                        for (index, target) in targets.iter().enumerate() {
-                            let title = if target.title.trim().is_empty() {
-                                "(untitled)"
-                            } else {
-                                target.title.trim()
-                            };
-                            println!("{}. [{}] {}", index + 1, target.id, title);
-                            println!("   {}", target.url.trim());
-                        }
-                    }
-                    Ok(0)
-                }
-                _ => bail!(
-                    "unsupported browser {:?} (expected chrome)",
-                    args.browser
-                ),
-            }
-        }
-        SessionCommand::Attach(args) => {
-            let adapter = args.browser.trim().to_lowercase();
-            let mode = normalize_session_mode(&args.mode)?;
-            match adapter.as_str() {
-                "chrome" | "chromium" => {
-                    let targets = discover_chrome_targets(
-                        &args.host,
-                        args.cdp_port,
-                        default_session_attach_timeout(),
-                    )?;
-                    let target = choose_chrome_target(
-                        &targets,
-                        args.target_id.as_deref().unwrap_or_default(),
-                        args.url_contains.as_deref().unwrap_or_default(),
-                        args.title_contains.as_deref().unwrap_or_default(),
-                    )?;
-                    let session_name = args
-                        .session_name
-                        .as_deref()
-                        .map(sanitize_profile_name)
-                        .unwrap_or_else(|| {
-                            sanitize_profile_name(if !target.id.is_empty() {
-                                &target.id
-                            } else {
-                                &target.title
-                            })
-                        });
-                    let session = AttachedSession {
-                        session: session_name.clone(),
-                        browser: "chrome".to_owned(),
-                        mode,
-                        target_id: target.id.clone(),
-                        title: target.title.clone(),
-                        url: target.url.clone(),
-                        ws_url: target.websocket_debugger_url.clone(),
-                        cdp_host: args.host.trim().to_owned(),
-                        cdp_port: args.cdp_port,
-                        created_at: current_timestamp_rfc3339(),
-                    };
-                    write_attached_session(&session)?;
-                    if args.json {
-                        print_json(&serde_json::json!({"ok": true, "session": session}))?;
-                    } else {
-                        println!("attached: {} ({})", session.session, session.mode);
-                        println!("  target_id={}", session.target_id);
-                        println!("  title={}", session.title.trim());
-                        println!("  url={}", session.url.trim());
-                    }
-                    Ok(0)
-                }
-                _ => bail!(
-                    "unsupported browser {:?} (expected chrome)",
-                    args.browser
-                ),
-            }
-        }
-        SessionCommand::List(args) | SessionCommand::Ls(args) => {
-            let sessions = list_attached_sessions()?;
-            if args.json {
-                print_json(&serde_json::json!({"ok": true, "sessions": sessions}))?;
-            } else if sessions.is_empty() {
-                println!("no attached sessions");
-            } else {
-                for (index, session) in sessions.iter().enumerate() {
-                    println!(
-                        "{}. {} [{}/{}]",
-                        index + 1,
-                        session.session,
-                        session.browser,
-                        session.mode
-                    );
-                    println!("   {}", session.url.trim());
-                }
-            }
-            Ok(0)
-        }
-        SessionCommand::Detach(args) | SessionCommand::Rm(args) | SessionCommand::Remove(args) => {
-            let session_name = sanitize_profile_name(&args.session_name);
-            delete_attached_session(&session_name)?;
-            if args.json {
-                print_json(&serde_json::json!({"ok": true, "session": session_name}))?;
-            } else {
-                println!("detached: {session_name}");
-            }
-            Ok(0)
-        }
-        SessionCommand::Act(args) | SessionCommand::Action(args) => {
-            let session = read_attached_session(&sanitize_profile_name(&args.session_name))?;
-            let result = run_session_action(
-                &session,
-                &SessionActionRequest {
-                    action: args.action.trim().to_lowercase(),
-                    selector: args.selector.unwrap_or_default(),
-                    text: args.text.unwrap_or_default(),
-                    expr: args.expr.unwrap_or_default(),
-                    out: args.out.unwrap_or_default(),
-                    delta_y: args.delta_y,
-                    steps: args.steps,
-                    human: SessionHumanOptions {
-                        enabled: args.human,
-                        min_delay_ms: args.min_delay_ms,
-                        max_delay_ms: args.max_delay_ms,
-                        type_min_delay: args.type_min_delay_ms,
-                        type_max_delay: args.type_max_delay_ms,
-                        mouse_steps: args.mouse_steps,
-                        scroll_step_px: args.scroll_step_px,
-                    },
-                },
-            )?;
-            if args.json {
-                print_json(&serde_json::json!({"ok": true, "result": result}))?;
-            } else if result.action == "screenshot" {
-                println!("screenshot: {}", result.output);
-            } else {
-                println!("{}: {}", result.action, result.value.unwrap_or_default());
-            }
-            Ok(0)
-        }
-    }
-}
-
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -991,13 +823,30 @@ fn apply_runtime_overrides(cfg: &mut BrowserConfig, overrides: &RuntimeOverrides
     }
     if let Some(value) = overrides.profile.as_ref() {
         cfg.profile_name = value.trim().to_owned();
+        // A new profile name invalidates the resolved dir unless an explicit
+        // dir was also passed; clearing lets the default re-resolve.
+        if overrides.profile_dir.is_none() {
+            cfg.profile_dir.clear();
+        }
+    }
+    if let Some(value) = overrides.agents.as_ref() {
+        let names: Vec<String> = value
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        cfg.agents = crate::browser::normalize_agents(&names);
     }
     let profile_dir_passed = overrides.profile_dir.is_some();
     if let Some(value) = overrides.profile_dir.as_ref() {
         cfg.profile_dir = value.trim().to_owned();
     }
-    if let Some(value) = overrides.host_bind.as_ref() {
-        cfg.host_bind = value.trim().to_owned();
+    if let Some(value) = overrides.host_mcp_bind.as_ref() {
+        cfg.host_mcp_bind = value.trim().to_owned();
+    }
+    if let Some(value) = overrides.host_novnc_bind.as_ref() {
+        cfg.host_novnc_bind = value.trim().to_owned();
     }
     if let Some(value) = overrides.host_mcp_port {
         cfg.host_mcp_port = value;
@@ -1021,9 +870,6 @@ fn apply_runtime_overrides(cfg: &mut BrowserConfig, overrides: &RuntimeOverrides
             cfg.vnc_password = trimmed.to_owned();
             cfg.vnc_password_generated = false;
         }
-    }
-    if let Some(value) = overrides.mcp_version.as_ref() {
-        cfg.mcp_version = value.trim().to_owned();
     }
     if let Some(value) = overrides.browser_channel.as_ref() {
         cfg.browser_channel = value.trim().to_owned();
@@ -1073,15 +919,6 @@ mod tests {
             run(&["config".to_owned(), "path".to_owned()]).expect("config path"),
             0
         );
-        assert!(
-            run(&[
-                "session".to_owned(),
-                "discover".to_owned(),
-                "--browser".to_owned(),
-                "firefox".to_owned()
-            ])
-            .is_err()
-        );
         set_env(
             "SURF_SETTINGS_FILE",
             previous_settings_file
@@ -1093,6 +930,19 @@ mod tests {
     }
 
     #[test]
+    fn profile_override_without_dir_resets_resolved_dir() {
+        let mut cfg = default_config();
+        cfg.profile_dir = "/tmp/stale".to_owned();
+        let overrides = RuntimeOverrides {
+            profile: Some("fresh".to_owned()),
+            ..Default::default()
+        };
+        assert!(!apply_runtime_overrides(&mut cfg, &overrides));
+        assert_eq!(cfg.profile_name, "fresh");
+        assert!(cfg.profile_dir.is_empty());
+    }
+
+    #[test]
     fn apply_runtime_overrides_updates_fields() {
         let mut cfg = default_config();
         let overrides = RuntimeOverrides {
@@ -1100,14 +950,15 @@ mod tests {
             container_name: Some("my-container".to_owned()),
             network: Some("bridge".to_owned()),
             profile: Some("my-profile".to_owned()),
+            agents: Some("alice,Bob".to_owned()),
             profile_dir: Some("/tmp/profile".to_owned()),
-            host_bind: Some("0.0.0.0:8000".to_owned()),
+            host_mcp_bind: Some("127.0.0.1".to_owned()),
+            host_novnc_bind: Some("0.0.0.0".to_owned()),
             host_mcp_port: Some(1),
             host_novnc_port: Some(2),
             mcp_port: Some(3),
             novnc_port: Some(4),
             vnc_password: Some("pass".to_owned()),
-            mcp_version: Some("1".to_owned()),
             browser_channel: Some("stable".to_owned()),
             allowed_hosts: Some("localhost".to_owned()),
         };
@@ -1117,14 +968,15 @@ mod tests {
         assert_eq!(cfg.container_name, "my-container");
         assert_eq!(cfg.network, "bridge");
         assert_eq!(cfg.profile_name, "my-profile");
+        assert_eq!(cfg.agents, vec!["alice".to_owned(), "bob".to_owned()]);
         assert_eq!(cfg.profile_dir, "/tmp/profile");
-        assert_eq!(cfg.host_bind, "0.0.0.0:8000");
+        assert_eq!(cfg.host_mcp_bind, "127.0.0.1");
+        assert_eq!(cfg.host_novnc_bind, "0.0.0.0");
         assert_eq!(cfg.host_mcp_port, 1);
         assert_eq!(cfg.host_novnc_port, 2);
         assert_eq!(cfg.mcp_port, 3);
         assert_eq!(cfg.novnc_port, 4);
         assert_eq!(cfg.vnc_password, "pass");
-        assert_eq!(cfg.mcp_version, "1");
         assert_eq!(cfg.browser_channel, "stable");
         assert_eq!(cfg.allowed_hosts, "localhost");
     }

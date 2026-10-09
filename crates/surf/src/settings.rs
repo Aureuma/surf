@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -7,12 +8,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
+use crate::browser::normalize_agents;
 use crate::constants::{
-    DEFAULT_CLOUDFLARED_IMAGE, DEFAULT_CONTAINER, DEFAULT_HOST_BIND, DEFAULT_HOST_CDP_PORT,
-    DEFAULT_HOST_MCP_PORT, DEFAULT_HOST_NOVNC_PORT, DEFAULT_IMAGE, DEFAULT_MCP_PORT,
-    DEFAULT_MCP_VERSION, DEFAULT_NETWORK, DEFAULT_NOVNC_PORT, DEFAULT_PROFILE_NAME,
-    DEFAULT_SURF_CONFIG_FILE, DEFAULT_SURF_CONFIG_ROOT, DEFAULT_SURF_STATE_DIR_PATH,
-    DEFAULT_TUNNEL_NAME, SESSION_MODE_INTERACTIVE, SESSION_MODE_READ_ONLY,
+    DEFAULT_CLOUDFLARED_IMAGE, DEFAULT_CONTAINER, DEFAULT_HOST_MCP_BIND, DEFAULT_HOST_MCP_PORT,
+    DEFAULT_HOST_NOVNC_BIND, DEFAULT_HOST_NOVNC_PORT, DEFAULT_IMAGE, DEFAULT_MCP_PORT,
+    DEFAULT_NETWORK, DEFAULT_NOVNC_PORT, DEFAULT_PROFILE_NAME, DEFAULT_SURF_CONFIG_FILE,
+    DEFAULT_SURF_CONFIG_ROOT, DEFAULT_SURF_STATE_DIR_PATH, DEFAULT_TUNNEL_NAME,
     SURF_SETTINGS_SCHEMA_VERSION,
 };
 use crate::paths::{default_state_path, env_trimmed, sanitize_profile_name, surf_settings_path};
@@ -23,8 +24,8 @@ pub struct SurfSettings {
     pub schema_version: i32,
     pub paths: SurfSettingsPaths,
     pub browser: SurfBrowserSettings,
-    pub existing_session: SurfExistingSessionSettings,
     pub tunnel: SurfTunnelSettings,
+    pub proxy: SurfProxySettings,
     pub metadata: SurfSettingsMetadata,
 }
 
@@ -50,15 +51,16 @@ pub struct SurfBrowserSettings {
     pub network: String,
     pub profile_name: String,
     pub profile_dir: String,
-    pub host_bind: String,
+    pub host_mcp_bind: String,
+    pub host_novnc_bind: String,
     pub host_mcp_port: i32,
     pub host_novnc_port: i32,
     pub mcp_port: i32,
     pub novnc_port: i32,
     pub vnc_password: String,
-    pub mcp_version: String,
     pub browser_channel: String,
     pub allowed_hosts: String,
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,25 +75,11 @@ pub struct SurfTunnelSettings {
     pub fort_env_file: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
-pub struct SurfExistingSessionSettings {
-    pub enabled: bool,
-    pub default_browser: String,
-    pub mode: String,
-    pub chrome_host: String,
-    pub chrome_cdp_port: i32,
-    pub attach_timeout_seconds: i32,
-    pub action_timeout_seconds: i32,
-    pub humanize: bool,
-    pub human_min_delay_ms: i32,
-    pub human_max_delay_ms: i32,
-    pub human_mouse_steps: i32,
-    pub human_type_min_delay_ms: i32,
-    pub human_type_max_delay_ms: i32,
-    pub human_scroll_step_px: i32,
-    pub allowed_domains: Vec<String>,
-    pub blocked_domains: Vec<String>,
+pub struct SurfProxySettings {
+    pub auth_token: String,
+    pub tokens: HashMap<String, String>,
 }
 
 impl Default for SurfSettings {
@@ -100,8 +88,8 @@ impl Default for SurfSettings {
             schema_version: SURF_SETTINGS_SCHEMA_VERSION,
             paths: SurfSettingsPaths::default(),
             browser: SurfBrowserSettings::default(),
-            existing_session: SurfExistingSessionSettings::default(),
             tunnel: SurfTunnelSettings::default(),
+            proxy: SurfProxySettings::default(),
             metadata: SurfSettingsMetadata::default(),
         }
     }
@@ -125,15 +113,16 @@ impl Default for SurfBrowserSettings {
             network: DEFAULT_NETWORK.to_owned(),
             profile_name: DEFAULT_PROFILE_NAME.to_owned(),
             profile_dir: String::new(),
-            host_bind: DEFAULT_HOST_BIND.to_owned(),
+            host_mcp_bind: DEFAULT_HOST_MCP_BIND.to_owned(),
+            host_novnc_bind: DEFAULT_HOST_NOVNC_BIND.to_owned(),
             host_mcp_port: DEFAULT_HOST_MCP_PORT,
             host_novnc_port: DEFAULT_HOST_NOVNC_PORT,
             mcp_port: DEFAULT_MCP_PORT,
             novnc_port: DEFAULT_NOVNC_PORT,
             vnc_password: String::new(),
-            mcp_version: DEFAULT_MCP_VERSION.to_owned(),
             browser_channel: "chromium".to_owned(),
             allowed_hosts: "*".to_owned(),
+            agents: Vec::new(),
         }
     }
 }
@@ -147,29 +136,6 @@ impl Default for SurfTunnelSettings {
             image: DEFAULT_CLOUDFLARED_IMAGE.to_owned(),
             fort_key: String::new(),
             fort_env_file: String::new(),
-        }
-    }
-}
-
-impl Default for SurfExistingSessionSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            default_browser: "chrome".to_owned(),
-            mode: SESSION_MODE_READ_ONLY.to_owned(),
-            chrome_host: "127.0.0.1".to_owned(),
-            chrome_cdp_port: DEFAULT_HOST_CDP_PORT,
-            attach_timeout_seconds: 8,
-            action_timeout_seconds: 15,
-            humanize: true,
-            human_min_delay_ms: 40,
-            human_max_delay_ms: 180,
-            human_mouse_steps: 12,
-            human_type_min_delay_ms: 35,
-            human_type_max_delay_ms: 130,
-            human_scroll_step_px: 280,
-            allowed_domains: vec!["*".to_owned()],
-            blocked_domains: vec![],
         }
     }
 }
@@ -206,8 +172,11 @@ pub fn apply_surf_settings_defaults(settings: &mut SurfSettings) {
         settings.browser.profile_name = DEFAULT_PROFILE_NAME.to_owned();
     }
     settings.browser.profile_name = sanitize_profile_name(&settings.browser.profile_name);
-    if settings.browser.host_bind.trim().is_empty() {
-        settings.browser.host_bind = DEFAULT_HOST_BIND.to_owned();
+    if settings.browser.host_mcp_bind.trim().is_empty() {
+        settings.browser.host_mcp_bind = DEFAULT_HOST_MCP_BIND.to_owned();
+    }
+    if settings.browser.host_novnc_bind.trim().is_empty() {
+        settings.browser.host_novnc_bind = DEFAULT_HOST_NOVNC_BIND.to_owned();
     }
     if settings.browser.host_mcp_port <= 0 {
         settings.browser.host_mcp_port = DEFAULT_HOST_MCP_PORT;
@@ -221,78 +190,13 @@ pub fn apply_surf_settings_defaults(settings: &mut SurfSettings) {
     if settings.browser.novnc_port <= 0 {
         settings.browser.novnc_port = DEFAULT_NOVNC_PORT;
     }
-    if settings.browser.mcp_version.trim().is_empty() {
-        settings.browser.mcp_version = DEFAULT_MCP_VERSION.to_owned();
-    }
     if settings.browser.browser_channel.trim().is_empty() {
         settings.browser.browser_channel = "chromium".to_owned();
     }
     if settings.browser.allowed_hosts.trim().is_empty() {
         settings.browser.allowed_hosts = "*".to_owned();
     }
-
-    let browser = settings
-        .existing_session
-        .default_browser
-        .trim()
-        .to_lowercase();
-    settings.existing_session.default_browser = match browser.as_str() {
-        "chrome" => browser,
-        _ => "chrome".to_owned(),
-    };
-
-    let mode = settings.existing_session.mode.trim().to_lowercase();
-    settings.existing_session.mode = match mode.as_str() {
-        SESSION_MODE_READ_ONLY | SESSION_MODE_INTERACTIVE => mode,
-        _ => SESSION_MODE_READ_ONLY.to_owned(),
-    };
-
-    if settings.existing_session.chrome_host.trim().is_empty() {
-        settings.existing_session.chrome_host = "127.0.0.1".to_owned();
-    }
-    if settings.existing_session.chrome_cdp_port <= 0 {
-        settings.existing_session.chrome_cdp_port = DEFAULT_HOST_CDP_PORT;
-    }
-    if settings.existing_session.attach_timeout_seconds <= 0 {
-        settings.existing_session.attach_timeout_seconds = 8;
-    }
-    if settings.existing_session.action_timeout_seconds <= 0 {
-        settings.existing_session.action_timeout_seconds = 15;
-    }
-    if settings.existing_session.human_min_delay_ms <= 0 {
-        settings.existing_session.human_min_delay_ms = 40;
-    }
-    if settings.existing_session.human_max_delay_ms <= 0 {
-        settings.existing_session.human_max_delay_ms = 180;
-    }
-    if settings.existing_session.human_max_delay_ms < settings.existing_session.human_min_delay_ms {
-        settings.existing_session.human_max_delay_ms = settings.existing_session.human_min_delay_ms;
-    }
-    if settings.existing_session.human_mouse_steps <= 0 {
-        settings.existing_session.human_mouse_steps = 12;
-    }
-    if settings.existing_session.human_type_min_delay_ms <= 0 {
-        settings.existing_session.human_type_min_delay_ms = 35;
-    }
-    if settings.existing_session.human_type_max_delay_ms <= 0 {
-        settings.existing_session.human_type_max_delay_ms = 130;
-    }
-    if settings.existing_session.human_type_max_delay_ms
-        < settings.existing_session.human_type_min_delay_ms
-    {
-        settings.existing_session.human_type_max_delay_ms =
-            settings.existing_session.human_type_min_delay_ms;
-    }
-    if settings.existing_session.human_scroll_step_px <= 0 {
-        settings.existing_session.human_scroll_step_px = 280;
-    }
-    if settings.existing_session.allowed_domains.is_empty() {
-        settings.existing_session.allowed_domains = vec!["*".to_owned()];
-    }
-    settings.existing_session.allowed_domains =
-        normalize_domain_list(&settings.existing_session.allowed_domains);
-    settings.existing_session.blocked_domains =
-        normalize_domain_list(&settings.existing_session.blocked_domains);
+    settings.browser.agents = normalize_agents(&settings.browser.agents);
 
     if settings.tunnel.container_name.trim().is_empty() {
         settings.tunnel.container_name = DEFAULT_TUNNEL_NAME.to_owned();
@@ -394,7 +298,8 @@ pub fn set_surf_config_value(settings: &mut SurfSettings, key: &str, value: &str
             settings.browser.profile_name = sanitize_profile_name(resolved_value)
         }
         "browser.profile_dir" => settings.browser.profile_dir = resolved_value.to_owned(),
-        "browser.host_bind" => settings.browser.host_bind = resolved_value.to_owned(),
+        "browser.host_mcp_bind" => settings.browser.host_mcp_bind = resolved_value.to_owned(),
+        "browser.host_novnc_bind" => settings.browser.host_novnc_bind = resolved_value.to_owned(),
         "browser.host_mcp_port" => {
             settings.browser.host_mcp_port = parse_i32(&resolved_key, resolved_value)?;
         }
@@ -408,9 +313,16 @@ pub fn set_surf_config_value(settings: &mut SurfSettings, key: &str, value: &str
             settings.browser.novnc_port = parse_i32(&resolved_key, resolved_value)?;
         }
         "browser.vnc_password" => settings.browser.vnc_password = resolved_value.to_owned(),
-        "browser.mcp_version" => settings.browser.mcp_version = resolved_value.to_owned(),
         "browser.browser_channel" => settings.browser.browser_channel = resolved_value.to_owned(),
         "browser.allowed_hosts" => settings.browser.allowed_hosts = resolved_value.to_owned(),
+        "browser.agents" => {
+            settings.browser.agents = resolved_value
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(sanitize_profile_name)
+                .collect();
+        }
         "tunnel.container_name" => settings.tunnel.container_name = resolved_value.to_owned(),
         "tunnel.target_url" => settings.tunnel.target_url = resolved_value.to_owned(),
         "tunnel.mode" => {
@@ -425,94 +337,26 @@ pub fn set_surf_config_value(settings: &mut SurfSettings, key: &str, value: &str
             settings.tunnel.fort_key = resolved_value.to_owned()
         }
         "tunnel.fort_env_file" => settings.tunnel.fort_env_file = resolved_value.to_owned(),
-        "existing_session.enabled" => {
-            settings.existing_session.enabled = parse_bool(&resolved_key, resolved_value)?;
-        }
-        "existing_session.default_browser" => {
-            let browser = resolved_value.to_lowercase();
-            if browser != "chrome" {
-                bail!("invalid browser {resolved_value:?} (expected chrome)");
+        "proxy.auth_token" => settings.proxy.auth_token = resolved_value.to_owned(),
+        _ if resolved_key.starts_with("proxy.tokens.") => {
+            let raw = resolved_key["proxy.tokens.".len()..].trim();
+            if raw.is_empty() {
+                bail!("unsupported key: {key}");
             }
-            settings.existing_session.default_browser = browser;
-        }
-        "existing_session.mode" => {
-            let mode = resolved_value.to_lowercase();
-            if mode != SESSION_MODE_READ_ONLY && mode != SESSION_MODE_INTERACTIVE {
-                bail!("invalid mode {resolved_value:?} (expected read_only|interactive)");
+            let name = sanitize_profile_name(raw);
+            if resolved_value.is_empty() {
+                settings.proxy.tokens.remove(&name);
+            } else {
+                settings
+                    .proxy
+                    .tokens
+                    .insert(name, resolved_value.to_owned());
             }
-            settings.existing_session.mode = mode;
-        }
-        "existing_session.chrome_host" => {
-            settings.existing_session.chrome_host = resolved_value.to_owned()
-        }
-        "existing_session.chrome_cdp_port" => {
-            settings.existing_session.chrome_cdp_port = parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.attach_timeout_seconds" => {
-            settings.existing_session.attach_timeout_seconds =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.action_timeout_seconds" => {
-            settings.existing_session.action_timeout_seconds =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.humanize" => {
-            settings.existing_session.humanize = parse_bool(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_min_delay_ms" => {
-            settings.existing_session.human_min_delay_ms =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_max_delay_ms" => {
-            settings.existing_session.human_max_delay_ms =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_mouse_steps" => {
-            settings.existing_session.human_mouse_steps = parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_type_min_delay_ms" => {
-            settings.existing_session.human_type_min_delay_ms =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_type_max_delay_ms" => {
-            settings.existing_session.human_type_max_delay_ms =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.human_scroll_step_px" => {
-            settings.existing_session.human_scroll_step_px =
-                parse_i32(&resolved_key, resolved_value)?;
-        }
-        "existing_session.allowed_domains" => {
-            settings.existing_session.allowed_domains = split_csv_list(resolved_value);
-        }
-        "existing_session.blocked_domains" => {
-            settings.existing_session.blocked_domains = split_csv_list(resolved_value);
         }
         _ => bail!("unsupported key: {key}"),
     }
     apply_surf_settings_defaults(settings);
     Ok(())
-}
-
-pub fn split_csv_list(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-pub fn normalize_domain_list(domains: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(domains.len());
-    for domain in domains {
-        let item = domain.trim().to_lowercase();
-        if item.is_empty() || out.contains(&item) {
-            continue;
-        }
-        out.push(item);
-    }
-    out
 }
 
 pub fn surf_state_dir() -> PathBuf {
@@ -534,12 +378,6 @@ fn parse_i32(key: &str, value: &str) -> Result<i32> {
     value
         .parse::<i32>()
         .with_context(|| format!("invalid int for {key}"))
-}
-
-fn parse_bool(key: &str, value: &str) -> Result<bool> {
-    value
-        .parse::<bool>()
-        .with_context(|| format!("invalid bool for {key}"))
 }
 
 fn iso_timestamp() -> String {
@@ -569,9 +407,7 @@ mod tests {
         apply_container_profile_default, default_config, host_connect, mcp_url,
         resolve_profile_mount,
     };
-    use crate::paths::{
-        container_profile_dir, env_lock, host_profile_dir, set_env, surf_settings_path,
-    };
+    use crate::paths::{container_profile_dir, env_lock, set_env, surf_settings_path};
 
     fn reset_env(home: &Path) {
         set_env("SURF_SETTINGS_HOME", Some(home.to_string_lossy().as_ref()));
@@ -583,13 +419,13 @@ mod tests {
         set_env("SURF_NETWORK", None);
         set_env("SURF_PROFILE", None);
         set_env("SURF_PROFILE_DIR", None);
-        set_env("SURF_HOST_BIND", None);
+        set_env("SURF_HOST_MCP_BIND", None);
+        set_env("SURF_HOST_NOVNC_BIND", None);
         set_env("SURF_HOST_MCP_PORT", None);
         set_env("SURF_HOST_NOVNC_PORT", None);
         set_env("SURF_MCP_PORT", None);
         set_env("SURF_NOVNC_PORT", None);
         set_env("SURF_VNC_PASSWORD", None);
-        set_env("SURF_MCP_VERSION", None);
         set_env("SURF_BROWSER_CHANNEL", None);
         set_env("SURF_ALLOWED_HOSTS", None);
         set_env("SURF_HOST_PROFILE", None);
@@ -620,33 +456,9 @@ mod tests {
         let mut settings = default_surf_settings();
         set_surf_config_value(&mut settings, "tunnel.mode", "token").unwrap();
         set_surf_config_value(&mut settings, "browser.host_mcp_port", "9999").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.mode", "interactive").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.default_browser", "chrome").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.chrome_cdp_port", "17777").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.humanize", "true").unwrap();
-        set_surf_config_value(&mut settings, "existing_session.human_mouse_steps", "16").unwrap();
-        set_surf_config_value(
-            &mut settings,
-            "existing_session.allowed_domains",
-            "example.com,*.example.org",
-        )
-        .unwrap();
-        set_surf_config_value(
-            &mut settings,
-            "existing_session.blocked_domains",
-            "admin.example.com",
-        )
-        .unwrap();
 
         assert_eq!(settings.tunnel.mode, "token");
         assert_eq!(settings.browser.host_mcp_port, 9999);
-        assert_eq!(settings.existing_session.mode, "interactive");
-        assert_eq!(settings.existing_session.default_browser, "chrome");
-        assert_eq!(settings.existing_session.chrome_cdp_port, 17777);
-        assert!(settings.existing_session.humanize);
-        assert_eq!(settings.existing_session.human_mouse_steps, 16);
-        assert_eq!(settings.existing_session.allowed_domains.len(), 2);
-        assert_eq!(settings.existing_session.blocked_domains.len(), 1);
         assert!(set_surf_config_value(&mut settings, "tunnel.mode", "bad").is_err());
     }
 
@@ -667,7 +479,6 @@ mod tests {
         settings.browser.mcp_port = 9900;
         settings.browser.novnc_port = 6091;
         settings.browser.vnc_password = "topsecret".to_owned();
-        settings.browser.mcp_version = "9.9.9".to_owned();
         settings.browser.browser_channel = "chrome".to_owned();
         settings.browser.allowed_hosts = "example.com".to_owned();
         save_surf_settings(&settings).unwrap();
@@ -680,7 +491,6 @@ mod tests {
         assert_eq!(cfg.host_mcp_port, 9999);
         assert_eq!(cfg.host_novnc_port, 6090);
         assert_eq!(cfg.vnc_password, "topsecret");
-        assert_eq!(cfg.mcp_version, "9.9.9");
     }
 
     #[test]
@@ -699,7 +509,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn tunnel_and_existing_session_round_trip() {
+    fn tunnel_round_trip() {
         let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         let home = tempfile::tempdir().unwrap();
         reset_env(home.path());
@@ -712,11 +522,6 @@ mod tests {
         want.tunnel.image = "cloudflare/cloudflared:2026.2.0".to_owned();
         want.tunnel.fort_key = "SURF_CLOUDFLARE_TUNNEL_TOKEN".to_owned();
         want.tunnel.fort_env_file = "/work/safe/surf/.env.dev".to_owned();
-        want.existing_session.mode = "interactive".to_owned();
-        want.existing_session.chrome_cdp_port = 19922;
-        want.existing_session.allowed_domains =
-            vec!["example.com".to_owned(), "*.example.org".to_owned()];
-        want.existing_session.blocked_domains = vec!["admin.example.com".to_owned()];
         save_surf_settings(&want).unwrap();
 
         let got = load_surf_settings().unwrap();
@@ -726,10 +531,6 @@ mod tests {
         assert_eq!(got.tunnel.image, want.tunnel.image);
         assert_eq!(got.tunnel.fort_key, want.tunnel.fort_key);
         assert_eq!(got.tunnel.fort_env_file, want.tunnel.fort_env_file);
-        assert_eq!(got.existing_session.mode, "interactive");
-        assert_eq!(got.existing_session.chrome_cdp_port, 19922);
-        assert_eq!(got.existing_session.allowed_domains.len(), 2);
-        assert_eq!(got.existing_session.blocked_domains.len(), 1);
     }
 
     #[test]
@@ -743,10 +544,6 @@ mod tests {
         assert_eq!(
             container_profile_dir("Work", &surf_state_dir()),
             PathBuf::from("/tmp/surf-state/browser/profiles/container/work")
-        );
-        assert_eq!(
-            host_profile_dir("work", &surf_state_dir()),
-            PathBuf::from("/tmp/surf-state/browser/profiles/host/work")
         );
         assert_eq!(host_connect(""), "127.0.0.1");
         assert_eq!(host_connect("0.0.0.0"), "127.0.0.1");

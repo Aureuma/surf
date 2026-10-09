@@ -88,14 +88,6 @@ pub fn container_profile_dir(profile: &str, state_dir: &Path) -> PathBuf {
         .join(sanitize_profile_name(profile))
 }
 
-pub fn host_profile_dir(profile: &str, state_dir: &Path) -> PathBuf {
-    state_dir
-        .join("browser")
-        .join("profiles")
-        .join("host")
-        .join(sanitize_profile_name(profile))
-}
-
 pub fn env_trimmed(key: &str) -> Option<String> {
     env::var(key)
         .ok()

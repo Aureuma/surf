@@ -4,9 +4,9 @@ use rand::Rng;
 use serde::Serialize;
 
 use crate::constants::{
-    DEFAULT_CONTAINER, DEFAULT_HOST_BIND, DEFAULT_HOST_MCP_PORT, DEFAULT_HOST_NOVNC_PORT,
-    DEFAULT_IMAGE, DEFAULT_MCP_PORT, DEFAULT_MCP_VERSION, DEFAULT_NETWORK, DEFAULT_NOVNC_PORT,
-    DEFAULT_PROFILE_NAME, PROFILE_VOLUME_PREFIX,
+    DEFAULT_AGENT_NAME, DEFAULT_CONTAINER, DEFAULT_HOST_MCP_BIND, DEFAULT_HOST_MCP_PORT,
+    DEFAULT_HOST_NOVNC_BIND, DEFAULT_HOST_NOVNC_PORT, DEFAULT_IMAGE, DEFAULT_MCP_PORT,
+    DEFAULT_NETWORK, DEFAULT_NOVNC_PORT, DEFAULT_PROFILE_NAME, MAX_AGENTS, PROFILE_VOLUME_PREFIX,
 };
 use crate::paths::{container_profile_dir, env_trimmed, expand_tilde, sanitize_profile_name};
 use crate::settings::{SurfSettings, load_surf_settings_or_default, surf_state_dir};
@@ -18,7 +18,8 @@ pub struct BrowserConfig {
     pub network: String,
     pub profile_name: String,
     pub profile_dir: String,
-    pub host_bind: String,
+    pub host_mcp_bind: String,
+    pub host_novnc_bind: String,
     pub host_mcp_port: i32,
     pub host_novnc_port: i32,
     pub mcp_port: i32,
@@ -26,9 +27,9 @@ pub struct BrowserConfig {
     #[serde(skip_serializing)]
     pub vnc_password: String,
     pub vnc_password_generated: bool,
-    pub mcp_version: String,
     pub browser_channel: String,
     pub allowed_hosts: String,
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -83,9 +84,16 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
         ),
         profile_name: profile,
         profile_dir,
-        host_bind: env_or(
-            "SURF_HOST_BIND",
-            first_non_empty([settings.browser.host_bind.trim(), DEFAULT_HOST_BIND]),
+        host_mcp_bind: env_or(
+            "SURF_HOST_MCP_BIND",
+            first_non_empty([settings.browser.host_mcp_bind.trim(), DEFAULT_HOST_MCP_BIND]),
+        ),
+        host_novnc_bind: env_or(
+            "SURF_HOST_NOVNC_BIND",
+            first_non_empty([
+                settings.browser.host_novnc_bind.trim(),
+                DEFAULT_HOST_NOVNC_BIND,
+            ]),
         ),
         host_mcp_port: env_or_int(
             "SURF_HOST_MCP_PORT",
@@ -105,10 +113,6 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
         ),
         vnc_password,
         vnc_password_generated,
-        mcp_version: env_or(
-            "SURF_MCP_VERSION",
-            first_non_empty([settings.browser.mcp_version.trim(), DEFAULT_MCP_VERSION]),
-        ),
         browser_channel: env_or(
             "SURF_BROWSER_CHANNEL",
             first_non_empty([settings.browser.browser_channel.trim(), "chromium"]),
@@ -117,7 +121,76 @@ pub fn from_settings(settings: &SurfSettings) -> BrowserConfig {
             "SURF_ALLOWED_HOSTS",
             first_non_empty([settings.browser.allowed_hosts.trim(), "*"]),
         ),
+        agents: resolve_agents(env_trimmed("SURF_AGENTS"), &settings.browser.agents),
     }
+}
+
+/// Resolve the agent list: explicit CSV env wins, else stored settings.
+/// Always yields at least the default agent.
+pub fn resolve_agents(env_csv: Option<String>, configured: &[String]) -> Vec<String> {
+    if let Some(csv) = env_csv {
+        let names: Vec<String> = csv
+            .split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .collect();
+        return normalize_agents(&names);
+    }
+    normalize_agents(configured)
+}
+
+/// Sanitize, dedupe, and cap agent names. Empty input yields ["default"].
+pub fn normalize_agents(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in raw {
+        // NB: sanitize never yields "" (empty maps to "default").
+        let name = sanitize_profile_name(name.trim());
+        if out.contains(&name) {
+            continue;
+        }
+        out.push(name);
+        if out.len() >= MAX_AGENTS {
+            break;
+        }
+    }
+    if out.is_empty() {
+        out.push(DEFAULT_AGENT_NAME.to_owned());
+    }
+    out
+}
+
+/// True when running the legacy single default agent (flat profile layout).
+pub fn is_legacy_single_agent(cfg: &BrowserConfig) -> bool {
+    cfg.agents.len() == 1 && cfg.agents[0] == DEFAULT_AGENT_NAME
+}
+
+/// Container-side MCP port for agent slot `index`.
+pub fn agent_container_port(cfg: &BrowserConfig, index: usize) -> i32 {
+    cfg.mcp_port + index as i32
+}
+
+/// Host-side MCP port for agent slot `index`.
+pub fn agent_host_port(cfg: &BrowserConfig, index: usize) -> i32 {
+    cfg.host_mcp_port + index as i32
+}
+
+/// Raw MCP URL for agent slot `index`.
+pub fn agent_mcp_url(cfg: &BrowserConfig, index: usize) -> String {
+    format!(
+        "http://{}:{}/mcp",
+        host_connect(&cfg.host_mcp_bind),
+        agent_host_port(cfg, index)
+    )
+}
+
+/// Host profile directory for an agent. The legacy single default agent
+/// keeps the flat profile dir; every other agent gets `agents/<name>/`.
+pub fn agent_profile_dir(cfg: &BrowserConfig, agent: &str) -> String {
+    if is_legacy_single_agent(cfg) {
+        return cfg.profile_dir.clone();
+    }
+    format!("{}/agents/{}", cfg.profile_dir.trim_end_matches('/'), agent)
 }
 
 pub fn resolve_vnc_password(
@@ -132,12 +205,12 @@ pub fn resolve_vnc_password(
     }
     let configured_password = configured_password.trim();
     if configured_password.is_empty() || is_legacy_placeholder_password(configured_password) {
-        return (generate_secure_vnc_password(24), true);
+        return (generate_secure_secret(24), true);
     }
     (configured_password.to_owned(), false)
 }
 
-pub fn generate_secure_vnc_password(len: usize) -> String {
+pub fn generate_secure_secret(len: usize) -> String {
     let mut rng = rand::rng();
     (&mut rng)
         .sample_iter(rand::distr::Alphanumeric)
@@ -185,7 +258,7 @@ pub fn host_connect(bind: &str) -> String {
 pub fn mcp_url(cfg: &BrowserConfig) -> String {
     format!(
         "http://{}:{}/mcp",
-        host_connect(&cfg.host_bind),
+        host_connect(&cfg.host_mcp_bind),
         cfg.host_mcp_port
     )
 }
@@ -193,7 +266,7 @@ pub fn mcp_url(cfg: &BrowserConfig) -> String {
 pub fn novnc_url(cfg: &BrowserConfig) -> String {
     format!(
         "http://{}:{}/vnc.html",
-        host_connect(&cfg.host_bind),
+        host_connect(&cfg.host_novnc_bind),
         cfg.host_novnc_port
     )
 }
@@ -226,17 +299,6 @@ pub fn apply_container_profile_default(profile_dir_flag_passed: bool, cfg: &mut 
     }
 }
 
-pub fn default_host_profile_name() -> String {
-    if let Some(profile) = env_trimmed("SURF_HOST_PROFILE") {
-        return sanitize_profile_name(&profile);
-    }
-    let settings = load_surf_settings_or_default();
-    if !settings.browser.profile_name.trim().is_empty() {
-        return sanitize_profile_name(&settings.browser.profile_name);
-    }
-    DEFAULT_PROFILE_NAME.to_owned()
-}
-
 fn env_or(key: &str, fallback: impl AsRef<str>) -> String {
     env_trimmed(key).unwrap_or_else(|| fallback.as_ref().trim().to_owned())
 }
@@ -264,9 +326,11 @@ fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserConfig, generate_secure_vnc_password, is_legacy_placeholder_password, novnc_url,
-        resolve_vnc_password, viewer_password_warnings,
+        BrowserConfig, agent_container_port, agent_host_port, agent_mcp_url, agent_profile_dir,
+        generate_secure_secret, is_legacy_placeholder_password, is_legacy_single_agent,
+        normalize_agents, novnc_url, resolve_vnc_password, viewer_password_warnings,
     };
+    use crate::constants::MAX_AGENTS;
 
     #[test]
     fn resolve_vnc_password_generates_for_empty_or_legacy_placeholder() {
@@ -301,7 +365,7 @@ mod tests {
         assert_eq!(viewer_password_warnings("shortpass", false).len(), 1);
         assert!(viewer_password_warnings("avery-strong-password", false).is_empty());
         assert!(is_legacy_placeholder_password("surf"));
-        assert!(generate_secure_vnc_password(24).len() >= 16);
+        assert!(generate_secure_secret(24).len() >= 16);
     }
 
     #[test]
@@ -312,18 +376,65 @@ mod tests {
             network: "network".to_owned(),
             profile_name: "profile".to_owned(),
             profile_dir: "volume:profile".to_owned(),
-            host_bind: "0.0.0.0".to_owned(),
+            host_mcp_bind: "127.0.0.1".to_owned(),
+            host_novnc_bind: "0.0.0.0".to_owned(),
             host_mcp_port: 8933,
             host_novnc_port: 6081,
             mcp_port: 8931,
             novnc_port: 6080,
             vnc_password: "password".to_owned(),
             vnc_password_generated: false,
-            mcp_version: "0.0.64".to_owned(),
             browser_channel: "chromium".to_owned(),
             allowed_hosts: "*".to_owned(),
+            agents: vec!["default".to_owned()],
         };
 
         assert_eq!(novnc_url(&cfg), "http://127.0.0.1:6081/vnc.html");
+    }
+
+    #[test]
+    fn normalize_agents_sanitizes_dedupes_and_defaults() {
+        let empty: Vec<String> = vec![];
+        assert_eq!(normalize_agents(&empty), vec!["default".to_owned()]);
+        assert_eq!(
+            normalize_agents(&["Alice".to_owned(), "alice ".to_owned(), "BOB".to_owned()]),
+            vec!["alice".to_owned(), "bob".to_owned()]
+        );
+        let many: Vec<String> = (0..20).map(|i| format!("agent-{i}")).collect();
+        assert_eq!(normalize_agents(&many).len(), MAX_AGENTS);
+    }
+
+    #[test]
+    fn agent_ports_and_profile_dirs_follow_slots() {
+        let cfg = BrowserConfig {
+            image_name: "image".to_owned(),
+            container_name: "container".to_owned(),
+            network: "network".to_owned(),
+            profile_name: "profile".to_owned(),
+            profile_dir: "/state/profile".to_owned(),
+            host_mcp_bind: "127.0.0.1".to_owned(),
+            host_novnc_bind: "0.0.0.0".to_owned(),
+            host_mcp_port: 8932,
+            host_novnc_port: 6080,
+            mcp_port: 8931,
+            novnc_port: 6080,
+            vnc_password: "password".to_owned(),
+            vnc_password_generated: false,
+            browser_channel: "chromium".to_owned(),
+            allowed_hosts: "*".to_owned(),
+            agents: vec!["alice".to_owned(), "bob".to_owned()],
+        };
+
+        assert!(!is_legacy_single_agent(&cfg));
+        assert_eq!(agent_container_port(&cfg, 0), 8931);
+        assert_eq!(agent_container_port(&cfg, 1), 8932);
+        assert_eq!(agent_host_port(&cfg, 1), 8933);
+        assert_eq!(agent_mcp_url(&cfg, 1), "http://127.0.0.1:8933/mcp");
+        assert_eq!(agent_profile_dir(&cfg, "bob"), "/state/profile/agents/bob");
+
+        let mut legacy = cfg.clone();
+        legacy.agents = vec!["default".to_owned()];
+        assert!(is_legacy_single_agent(&legacy));
+        assert_eq!(agent_profile_dir(&legacy, "default"), "/state/profile");
     }
 }

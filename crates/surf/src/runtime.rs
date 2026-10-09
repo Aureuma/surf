@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -9,8 +8,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 
 use crate::browser::{
-    BrowserConfig, apply_container_profile_default, mcp_url, novnc_url, resolve_profile_mount,
-    viewer_password_warnings,
+    BrowserConfig, agent_container_port, agent_host_port, agent_mcp_url, agent_profile_dir,
+    apply_container_profile_default, is_legacy_single_agent, mcp_url, novnc_url,
+    resolve_profile_mount, viewer_password_warnings,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,7 +27,17 @@ pub struct StatusPayload {
     pub novnc_container_code: i32,
     pub mcp_ready: bool,
     pub novnc_ready: bool,
+    pub agents: Vec<AgentStatus>,
     pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentStatus {
+    pub name: String,
+    pub slot: usize,
+    pub mcp_url: String,
+    pub host_code: i32,
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,10 +95,7 @@ pub fn build_runtime(
     })
 }
 
-pub fn start_runtime(
-    cfg: &BrowserConfig,
-    profile_dir_flag_passed: bool,
-) -> Result<StartResult> {
+pub fn start_runtime(cfg: &BrowserConfig, profile_dir_flag_passed: bool) -> Result<StartResult> {
     must_have_command("docker")?;
     let mut cfg = cfg.clone();
     apply_container_profile_default(profile_dir_flag_passed, &mut cfg);
@@ -97,11 +104,18 @@ pub fn start_runtime(
     if let Some(host_path) = profile_mount.host_path.as_ref() {
         fs::create_dir_all(host_path)
             .with_context(|| format!("create profile directory {host_path}"))?;
+        if !is_legacy_single_agent(&cfg) {
+            for agent in &cfg.agents {
+                let dir = agent_profile_dir(&cfg, agent);
+                fs::create_dir_all(&dir)
+                    .with_context(|| format!("create agent profile directory {dir}"))?;
+            }
+        }
     }
     remove_docker_container(&cfg.container_name)?;
     ensure_docker_network(&cfg.network)?;
 
-    let run_args = vec![
+    let mut run_args = vec![
         "run".to_owned(),
         "-d".to_owned(),
         "--name".to_owned(),
@@ -117,8 +131,6 @@ pub fn start_runtime(
         "-e".to_owned(),
         format!("VNC_PASSWORD={}", cfg.vnc_password),
         "-e".to_owned(),
-        format!("MCP_VERSION={}", cfg.mcp_version),
-        "-e".to_owned(),
         format!("BROWSER_CHANNEL={}", cfg.browser_channel),
         "-e".to_owned(),
         format!("ALLOWED_HOSTS={}", cfg.allowed_hosts),
@@ -126,17 +138,28 @@ pub fn start_runtime(
         format!("MCP_PORT={}", cfg.mcp_port),
         "-e".to_owned(),
         format!("NOVNC_PORT={}", cfg.novnc_port),
-        "-p".to_owned(),
-        format!("{}:{}:{}", cfg.host_bind, cfg.host_mcp_port, cfg.mcp_port),
-        "-p".to_owned(),
-        format!(
-            "{}:{}:{}",
-            cfg.host_bind, cfg.host_novnc_port, cfg.novnc_port
-        ),
-        "-v".to_owned(),
-        profile_mount.mount_arg,
-        cfg.image_name.clone(),
+        "-e".to_owned(),
+        format!("AGENTS={}", cfg.agents.join(",")),
+        "-e".to_owned(),
+        format!("PROFILE_NAME={}", cfg.profile_name),
     ];
+    for (slot, _) in cfg.agents.iter().enumerate() {
+        run_args.push("-p".to_owned());
+        run_args.push(format!(
+            "{}:{}:{}",
+            cfg.host_mcp_bind,
+            agent_host_port(&cfg, slot),
+            agent_container_port(&cfg, slot)
+        ));
+    }
+    run_args.push("-p".to_owned());
+    run_args.push(format!(
+        "{}:{}:{}",
+        cfg.host_novnc_bind, cfg.host_novnc_port, cfg.novnc_port
+    ));
+    run_args.push("-v".to_owned());
+    run_args.push(profile_mount.mount_arg);
+    run_args.push(cfg.image_name.clone());
     run_docker_output(&run_args).context("docker run failed")?;
 
     let status = wait_for_status(&cfg, 15, Duration::from_secs(1))?;
@@ -200,6 +223,7 @@ pub fn evaluate_status(cfg: &BrowserConfig) -> Result<StatusPayload> {
         novnc_container_code: 0,
         mcp_ready: false,
         novnc_ready: false,
+        agents: Vec::new(),
         error: String::new(),
     };
 
@@ -217,23 +241,47 @@ pub fn evaluate_status(cfg: &BrowserConfig) -> Result<StatusPayload> {
         return Ok(status);
     }
 
-    status.mcp_host_code = probe_http_status(&status.mcp_url);
-    if matches!(status.mcp_host_code, 200 | 400) {
-        status.mcp_ready = true;
+    for (slot, name) in cfg.agents.iter().enumerate() {
+        let url = agent_mcp_url(cfg, slot);
+        let code = probe_http_status(&url);
+        let ready = matches!(code, 200 | 400);
+        if slot == 0 {
+            status.mcp_host_code = code;
+        }
+        status.agents.push(AgentStatus {
+            name: name.clone(),
+            slot,
+            mcp_url: url,
+            host_code: code,
+            ready,
+        });
     }
+    status.mcp_ready = !status.agents.is_empty() && status.agents.iter().all(|a| a.ready);
     status.novnc_host_code = probe_http_status(&status.novnc_url);
     if (200..400).contains(&status.novnc_host_code) {
         status.novnc_ready = true;
     }
 
     if !status.mcp_ready {
-        status.mcp_container_code = probe_container_http_status(
-            &cfg.container_name,
-            &format!("http://127.0.0.1:{}/mcp", cfg.mcp_port),
-        );
-        if matches!(status.mcp_container_code, 200 | 400) {
-            status.mcp_ready = true;
+        for agent in status.agents.iter_mut() {
+            if agent.ready {
+                continue;
+            }
+            let code = probe_container_http_status(
+                &cfg.container_name,
+                &format!(
+                    "http://127.0.0.1:{}/mcp",
+                    agent_container_port(cfg, agent.slot)
+                ),
+            );
+            if agent.slot == 0 {
+                status.mcp_container_code = code;
+            }
+            if matches!(code, 200 | 400) {
+                agent.ready = true;
+            }
         }
+        status.mcp_ready = !status.agents.is_empty() && status.agents.iter().all(|a| a.ready);
     }
     if !status.novnc_ready {
         status.novnc_container_code = probe_container_http_status(
@@ -270,11 +318,6 @@ pub fn wait_for_status(
         last.error = "browser health checks did not pass in time".to_owned();
     }
     Err(anyhow!(last.error.clone()))
-}
-
-pub fn resolve_assets_root(repo: Option<&str>) -> Result<PathBuf> {
-    let root = resolve_repo_root(repo)?;
-    resolve_assets_root_from_root(&root)
 }
 
 pub fn resolve_build_inputs(
@@ -379,6 +422,73 @@ pub fn ensure_docker_network(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Read the agent list (and profile) the container was started with.
+///
+/// Falls back to settings when the container does not exist. Preferring the
+/// running container keeps `agent` and `proxy` truthful when agents were
+/// passed as `start --agents` flags rather than stored settings.
+pub fn container_identity(container_name: &str) -> Option<(String, Vec<String>)> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{range .Config.Env}}{{println .}}{{end}}",
+            container_name,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut profile = None;
+    let mut agents = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("AGENTS=") {
+            let names: Vec<String> = value
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect();
+            agents = Some(crate::browser::normalize_agents(&names));
+        } else if let Some(value) = line.strip_prefix("PROFILE_NAME=") {
+            profile = Some(value.trim().to_owned());
+        }
+    }
+    Some((profile.unwrap_or_default(), agents?))
+}
+
+/// Switch the container's active Fluxbox workspace (what noVNC shows).
+pub fn switch_agent_workspace(container_name: &str, slot: usize) -> Result<()> {
+    must_have_command("docker")?;
+    let (running, _) = is_container_running(container_name)?;
+    if !running {
+        bail!("container {container_name} is not running");
+    }
+    // The entrypoint always uses display :99 (DISPLAY_NUM has no surf-level
+    // override); wmctrl needs it set explicitly under docker exec.
+    let output = Command::new("docker")
+        .args([
+            "exec",
+            "-e",
+            "DISPLAY=:99",
+            container_name,
+            "wmctrl",
+            "-s",
+            &slot.to_string(),
+        ])
+        .output()
+        .context("docker exec wmctrl")?;
+    if !output.status.success() {
+        bail!(
+            "wmctrl -s {slot} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 pub fn remove_docker_container(name: &str) -> Result<()> {
     let name = name.trim();
     if name.is_empty() {
@@ -479,36 +589,6 @@ pub fn find_command(command: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-pub fn copy_dir(source: &Path, dest: &Path) -> Result<()> {
-    fs::create_dir_all(dest).with_context(|| format!("create directory {}", dest.display()))?;
-    for entry in fs::read_dir(source).with_context(|| format!("read {}", source.display()))? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dest.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&src_path, &dst_path)?;
-        } else {
-            copy_file(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
-pub fn copy_file(source: &Path, dest: &Path) -> Result<()> {
-    let mut input =
-        fs::File::open(source).with_context(|| format!("open source file {}", source.display()))?;
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create parent directory {}", parent.display()))?;
-    }
-    let mut output =
-        fs::File::create(dest).with_context(|| format!("create destination {}", dest.display()))?;
-    io::copy(&mut input, &mut output)
-        .with_context(|| format!("copy {} -> {}", source.display(), dest.display()))?;
-    output.flush().ok();
-    Ok(())
 }
 
 pub fn single_quote(value: &str) -> String {
