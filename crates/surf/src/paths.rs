@@ -54,10 +54,10 @@ pub fn surf_settings_root_dir() -> PathBuf {
         return clean_path(explicit);
     }
     if let Some(home_override) = env_trimmed("SURF_SETTINGS_HOME") {
-        return clean_path(home_override).join(".si").join("surf");
+        return clean_path(home_override).join(".surf");
     }
     if let Some(home) = home_dir() {
-        return home.join(".si").join("surf");
+        return home.join(".surf");
     }
     clean_path(DEFAULT_SURF_CONFIG_ROOT)
 }

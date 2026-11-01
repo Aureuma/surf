@@ -98,6 +98,7 @@ pub fn build_runtime(
 pub fn start_runtime(cfg: &BrowserConfig, profile_dir_flag_passed: bool) -> Result<StartResult> {
     must_have_command("docker")?;
     let mut cfg = cfg.clone();
+    cfg.vnc_password = crate::fort::resolve_secret_value(&cfg.vnc_password)?;
     apply_container_profile_default(profile_dir_flag_passed, &mut cfg);
     let profile_mount = resolve_profile_mount(&cfg.profile_dir);
 

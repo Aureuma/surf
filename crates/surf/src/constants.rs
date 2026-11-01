@@ -15,8 +15,8 @@ pub const DEFAULT_CLOUDFLARED_IMAGE: &str = "cloudflare/cloudflared:latest";
 pub const PROFILE_VOLUME_PREFIX: &str = "volume:";
 
 pub const SURF_SETTINGS_SCHEMA_VERSION: i32 = 1;
-pub const DEFAULT_SURF_CONFIG_ROOT: &str = "~/.si/surf";
-pub const DEFAULT_SURF_CONFIG_FILE: &str = "~/.si/surf/settings.toml";
+pub const DEFAULT_SURF_CONFIG_ROOT: &str = "~/.surf";
+pub const DEFAULT_SURF_CONFIG_FILE: &str = "~/.surf/settings.toml";
 pub const DEFAULT_SURF_STATE_DIR_PATH: &str = "~/.surf";
 
 pub const DEFAULT_AGENT_NAME: &str = "default";

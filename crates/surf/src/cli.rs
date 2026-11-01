@@ -616,13 +616,21 @@ fn handle_proxy(args: ProxyArgs) -> Result<i32> {
     if dirty {
         save_surf_settings(&settings)?;
     }
+    let main_token = crate::fort::resolve_secret_value(&token)?;
+    let mut tokens = std::collections::HashMap::new();
+    for (agent, agent_token) in &settings.proxy.tokens {
+        tokens.insert(
+            agent.clone(),
+            crate::fort::resolve_secret_value(agent_token)?,
+        );
+    }
     run_proxy(&ProxyConfig {
         bind: args.bind,
         port: args.port,
         upstream: args.upstream,
-        main_token: token,
+        main_token,
         agents: cfg.agents,
-        tokens: settings.proxy.tokens,
+        tokens,
     })?;
     Ok(0)
 }

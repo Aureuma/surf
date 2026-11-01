@@ -441,7 +441,7 @@ mod tests {
         let settings = load_surf_settings().unwrap();
         assert_eq!(settings.schema_version, 1);
 
-        let path = home.path().join(".si").join("surf").join("settings.toml");
+        let path = home.path().join(".surf").join("settings.toml");
         assert!(
             path.exists(),
             "expected settings file at {}",

@@ -163,7 +163,11 @@ container boot so restarts always come up clean.)
 
 ## Settings
 
-`~/.si/surf/settings.toml` (auto-created, mode `0600`):
+`~/.surf/settings.toml` (auto-created, mode `0600`):
+
+Secret fields accept `fort:<KEY>` references resolved from the Fort `surf`
+scope (`SURF_FORT_ENV`, default `dev`) at use time; literal values remain
+supported for local overrides.
 
 ```bash
 surf config show            # whole file (includes secrets)

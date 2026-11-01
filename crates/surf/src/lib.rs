@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod cli;
 pub mod constants;
+pub mod fort;
 pub mod paths;
 pub mod proxy;
 pub mod runtime;
