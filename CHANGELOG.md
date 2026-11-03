@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Retired] - 2026-11-03
+### Removed
+- Decommissioned the Surf stack: stopped and removed `surf-playwright-mcp-headed`,
+  `surf-mcp-cloudflared`, and `surf-novnc-cloudflared`; deleted the `surf-shared`
+  network, the `surf-profile-surf` volume, the `surf-browser:local` image, local
+  `~/.surf` state, and the `surf-browser(. -mcp).aureuma.ai` dev-tunnel routes and DNS.
+  Repository kept for reference only.
+
 ## [v0.1.7] - 2026-04-19
 ### Fixed
 - Regenerated Surf's workspace lockfile so `cargo build --locked` succeeds again for the browser runtime Docker build.

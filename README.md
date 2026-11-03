@@ -1,6 +1,17 @@
-# surf
+# surf — RETIRED (November 2026)
 
-`surf` is a Playwright MCP server: one container running a headed Chromium
+> **This project is decommissioned.** The Surf browser stack
+> (`surf-playwright-mcp-headed`, its `surf-mcp`/`surf-novnc` cloudflared
+> companions, the `surf-shared` network, and the dev-tunnel routes
+> `surf-browser.aureuma.ai` / `surf-browser-mcp.aureuma.ai`) was shut down and
+> removed. The `surf-browser:local` image, containers, volumes, and local
+> `~/.surf` state are gone; only encrypted credentials remain in `safe/surf`
+> and the Fort surf scopes. This repository is kept for reference. To revive,
+> rebuild the image (`ghcr.io/aureuma/surf-browser:local`), recreate the
+> containers, and re-add the tunnel routes per `docs/` and the Viva
+> `CLOUDFLARE_TUNNEL.md` history.
+
+`surf` was a Playwright MCP server: one container running a headed Chromium
 per agent, each with its own profile and MCP endpoint, plus a browser-based
 viewer with one named workspace per agent so the operator watches every
 agent's tabs.
